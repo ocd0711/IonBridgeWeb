@@ -502,34 +502,14 @@ h1 {
 }
 
 .candysign {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  color: #17251f;
-  font-size: 18px;
-  font-weight: 800;
+  display: block;
+  width: 160px;
+  height: auto;
+  color: #153726;
 }
 
-.candysign::before {
-  display: inline-block;
-  width: 34px;
-  height: 17px;
-  margin-right: 8px;
-  background:
-    linear-gradient(135deg, transparent 0 18%, #153726 19% 78%, transparent 79%) left center / 15px 17px no-repeat,
-    linear-gradient(45deg, transparent 0 18%, #153726 19% 78%, transparent 79%) right center / 15px 17px no-repeat;
-  content: "";
-  vertical-align: -2px;
-}
-
-.candysign::after {
-  position: absolute;
-  left: 12px;
-  width: 10px;
-  height: 10px;
-  border-radius: 999px;
-  background: #153726;
-  content: "";
+.candysign path {
+  fill: currentColor;
 }
 
 .device-main {
