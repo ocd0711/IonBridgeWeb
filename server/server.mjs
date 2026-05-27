@@ -282,11 +282,15 @@ async function migrateJsonlHistory() {
 async function handleHistory(url, res) {
   const target = normalizeTarget(url.searchParams.get("target") ?? config.targetUrl);
   const hours = Math.max(1, Math.min(24 * 30, Number(url.searchParams.get("hours") ?? 24)));
+  const startParam = Number(url.searchParams.get("start"));
+  const endParam = Number(url.searchParams.get("end"));
   const portFilter = url.searchParams.get("port");
-  const cutoff = Date.now() - hours * 60 * 60 * 1000;
+  const now = Date.now();
+  const start = Number.isFinite(startParam) ? startParam : now - hours * 60 * 60 * 1000;
+  const end = Number.isFinite(endParam) ? endParam : now;
   const deviceKey = resolveHistoryDeviceKey(target);
-  const rows = queryHistory({ deviceKey, cutoff, portFilter });
-  sendJson(res, { target, deviceKey, hours, rows });
+  const rows = queryHistory({ deviceKey, start, end, portFilter });
+  sendJson(res, { target, deviceKey, hours, start, end, rows });
 }
 
 function resolveHistoryDeviceKey(target) {
@@ -308,19 +312,19 @@ function resolveHistoryDeviceKey(target) {
   return sample?.device_key ?? normalizedTarget;
 }
 
-function queryHistory({ deviceKey, cutoff, portFilter }) {
+function queryHistory({ deviceKey, start, end, portFilter }) {
   const sql = portFilter
     ? `SELECT ts, target, port, voltage, current, temperature_c, power_w, attached, protocol
        FROM samples
-       WHERE device_key = ? AND port = ? AND ts >= ?
+       WHERE device_key = ? AND port = ? AND ts >= ? AND ts <= ?
        ORDER BY ts ASC`
     : `SELECT ts, target, port, voltage, current, temperature_c, power_w, attached, protocol
        FROM samples
-       WHERE device_key = ? AND ts >= ?
+       WHERE device_key = ? AND ts >= ? AND ts <= ?
        ORDER BY ts ASC`;
   const rows = portFilter
-    ? db.prepare(sql).all(deviceKey, Number(portFilter), cutoff)
-    : db.prepare(sql).all(deviceKey, cutoff);
+    ? db.prepare(sql).all(deviceKey, Number(portFilter), start, end)
+    : db.prepare(sql).all(deviceKey, start, end);
   return rows.map((row) => ({ ...row, attached: Boolean(row.attached) }));
 }
 

@@ -1566,6 +1566,31 @@ h1 {
   outline: none;
 }
 
+.history-filters input {
+  width: 180px;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-family: "SF Mono", "Cascadia Code", monospace;
+  font-size: 12px;
+  font-weight: 800;
+  outline: none;
+}
+
+.datetime-filter span,
+.panel-note {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.panel-note {
+  display: block;
+  margin-top: 5px;
+  text-transform: none;
+}
+
 .history-stats {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

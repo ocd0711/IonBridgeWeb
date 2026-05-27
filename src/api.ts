@@ -83,16 +83,22 @@ export async function saveServerConfig(config: { targetUrl: string; refreshInter
 export async function fetchServerHistory({
   targetUrl,
   hours,
+  start,
+  end,
   port,
 }: {
   targetUrl: string;
-  hours: number;
+  hours?: number;
+  start?: number;
+  end?: number;
   port: number | null;
 }): Promise<ServerHistoryRow[]> {
   const params = new URLSearchParams({
     target: normalizeDeviceTarget(targetUrl),
-    hours: String(hours),
   });
+  if (hours != null) params.set("hours", String(hours));
+  if (start != null) params.set("start", String(start));
+  if (end != null) params.set("end", String(end));
   if (port != null) params.set("port", String(port));
 
   const response = await fetch(`/api/history?${params.toString()}`, { cache: "no-store" });

@@ -1007,29 +1007,53 @@ function LongHistoryPanel({
   ports: PortMetrics[];
   updatedAt: Date | null;
 }) {
+  const now = React.useMemo(() => new Date(), []);
   const [hours, setHours] = React.useState(24);
+  const [rangeMode, setRangeMode] = React.useState<"preset" | "custom">("preset");
+  const [customStart, setCustomStart] = React.useState(formatDateTimeLocal(new Date(now.getTime() - 24 * 60 * 60 * 1000)));
+  const [customEnd, setCustomEnd] = React.useState(formatDateTimeLocal(now));
   const [portFilter, setPortFilter] = React.useState<number | null>(null);
   const [rows, setRows] = React.useState<ServerHistoryRow[]>([]);
   const [status, setStatus] = React.useState<"loading" | "ready" | "empty" | "unavailable">("loading");
+  const [loadedAt, setLoadedAt] = React.useState<Date | null>(null);
+  const start = rangeMode === "custom" ? parseDateTimeLocal(customStart) : undefined;
+  const end = rangeMode === "custom" ? parseDateTimeLocal(customEnd) : undefined;
+  const canQuery = rangeMode === "preset" || (start != null && end != null && start <= end);
 
   React.useEffect(() => {
     let alive = true;
+    if (!canQuery) {
+      setRows([]);
+      setLoadedAt(null);
+      setStatus("empty");
+      return () => {
+        alive = false;
+      };
+    }
     setStatus("loading");
-    fetchServerHistory({ targetUrl, hours, port: portFilter })
+    fetchServerHistory({
+      targetUrl,
+      hours: rangeMode === "preset" ? hours : undefined,
+      start,
+      end,
+      port: portFilter,
+    })
       .then((nextRows) => {
         if (!alive) return;
         setRows(nextRows);
+        setLoadedAt(new Date());
         setStatus(nextRows.length > 0 ? "ready" : "empty");
       })
       .catch(() => {
         if (!alive) return;
         setRows([]);
+        setLoadedAt(null);
         setStatus("unavailable");
       });
     return () => {
       alive = false;
     };
-  }, [targetUrl, hours, portFilter, updatedAt?.getTime()]);
+  }, [targetUrl, hours, rangeMode, customStart, customEnd, portFilter, updatedAt?.getTime(), canQuery, start, end]);
 
   const chartRows = React.useMemo(() => buildServerHistoryChartRows(rows), [rows]);
   const powerValues = chartRows.map((row) => row.power);
@@ -1043,10 +1067,19 @@ function LongHistoryPanel({
         <div>
           <p>Server history</p>
           <h2>长时间历史与筛选</h2>
+          <span className="panel-note">
+            自动跟随 metrics 刷新{loadedAt ? ` · ${loadedAt.toLocaleTimeString("zh-CN", { hour12: false })}` : ""}
+          </span>
         </div>
         <div className="history-filters" aria-label="历史筛选">
           <label>
             <Filter size={15} />
+            <select value={rangeMode} onChange={(event) => setRangeMode(event.target.value as "preset" | "custom")}>
+              <option value="preset">Preset</option>
+              <option value="custom">Custom</option>
+            </select>
+          </label>
+          {rangeMode === "preset" ? <label>
             <select value={hours} onChange={(event) => setHours(Number(event.target.value))}>
               <option value={1}>1h</option>
               <option value={6}>6h</option>
@@ -1054,7 +1087,16 @@ function LongHistoryPanel({
               <option value={168}>7d</option>
               <option value={720}>30d</option>
             </select>
-          </label>
+          </label> : <>
+            <label className="datetime-filter">
+              <span>From</span>
+              <input type="datetime-local" value={customStart} onChange={(event) => setCustomStart(event.target.value)} />
+            </label>
+            <label className="datetime-filter">
+              <span>To</span>
+              <input type="datetime-local" value={customEnd} onChange={(event) => setCustomEnd(event.target.value)} />
+            </label>
+          </>}
           <label>
             <Database size={15} />
             <select
@@ -1132,6 +1174,8 @@ function LongHistoryPanel({
           <strong>
             {status === "loading"
               ? "正在读取服务端历史..."
+              : !canQuery
+                ? "自定义时间范围无效"
               : status === "empty"
                 ? "当前筛选范围还没有历史样本"
                 : "当前运行模式没有可用的服务端历史"}
@@ -1141,6 +1185,16 @@ function LongHistoryPanel({
       )}
     </section>
   );
+}
+
+function formatDateTimeLocal(date: Date) {
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function parseDateTimeLocal(value: string) {
+  const time = new Date(value).getTime();
+  return Number.isFinite(time) ? time : undefined;
 }
 
 function buildServerHistoryChartRows(rows: ServerHistoryRow[]) {
@@ -1217,6 +1271,7 @@ function PowerChart({ history }: { history: PortHistory }) {
         <div>
           <p>Port timeline</p>
           <h2>实时功率与温度</h2>
+          <span className="panel-note">{getHistoryCoverageLabel(history)}</span>
         </div>
         <Activity size={20} />
       </div>
