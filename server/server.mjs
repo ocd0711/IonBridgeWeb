@@ -1,6 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { createReadStream, existsSync } from "node:fs";
-import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { extname, join, normalize } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -71,11 +71,13 @@ server.listen(Number(process.env.PORT ?? 18318), "0.0.0.0");
 
 async function loadConfig() {
   try {
-    const raw = JSON.parse(await readFile(configPath, "utf8"));
-    return {
-      targetUrl: normalizeTarget(raw.targetUrl ?? defaultTarget),
-      refreshIntervalMs: clampInterval(Number(raw.refreshIntervalMs ?? defaultIntervalMs)),
-    };
+    const raw = await readFile(configPath, "utf8");
+    const parsed = parseConfig(raw);
+    const nextConfig = normalizeConfig(parsed);
+    if (raw.trim() !== JSON.stringify(nextConfig, null, 2)) {
+      await saveConfig(nextConfig);
+    }
+    return nextConfig;
   } catch {
     await saveConfig(config);
     return config;
@@ -84,7 +86,60 @@ async function loadConfig() {
 
 async function saveConfig(nextConfig) {
   await mkdir(dataDir, { recursive: true });
-  await writeFile(configPath, JSON.stringify(nextConfig, null, 2));
+  const tmpPath = `${configPath}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
+  await writeFile(tmpPath, `${JSON.stringify(normalizeConfig(nextConfig), null, 2)}\n`, { flag: "wx" });
+  await rename(tmpPath, configPath);
+}
+
+function parseConfig(raw) {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    const recovered = firstJsonObject(raw);
+    if (!recovered) throw new Error("config.json is not valid JSON");
+    return JSON.parse(recovered);
+  }
+}
+
+function firstJsonObject(raw) {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  let start = -1;
+  for (let index = 0; index < raw.length; index += 1) {
+    const char = raw[index];
+    if (start === -1) {
+      if (char === "{") {
+        start = index;
+        depth = 1;
+      }
+      continue;
+    }
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === "\\") {
+      escaped = inString;
+      continue;
+    }
+    if (char === "\"") {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+    if (char === "{") depth += 1;
+    if (char === "}") depth -= 1;
+    if (depth === 0) return raw.slice(start, index + 1);
+  }
+  return null;
+}
+
+function normalizeConfig(raw) {
+  return {
+    targetUrl: normalizeTarget(raw?.targetUrl ?? defaultTarget),
+    refreshIntervalMs: clampInterval(Number(raw?.refreshIntervalMs ?? defaultIntervalMs)),
+  };
 }
 
 function startCollector() {
