@@ -1,0 +1,5 @@
+node_modules/
+dist/
+*.tsbuildinfo
+preview-*.png
+.DS_Store
