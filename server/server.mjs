@@ -1,6 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { createReadStream, existsSync } from "node:fs";
-import { mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, stat } from "node:fs/promises";
 import { createServer } from "node:http";
 import { extname, join, normalize } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -12,8 +12,7 @@ const dataDir = process.env.IONBRIDGE_DATA_DIR ?? "/data";
 const configPath = join(dataDir, "config.json");
 const databasePath = join(dataDir, "ionbridge.db");
 const historyDir = join(dataDir, "history");
-const defaultTarget = process.env.IONBRIDGE_TARGET ?? "http://192.168.217.161";
-const defaultIntervalMs = Number(process.env.IONBRIDGE_REFRESH_MS ?? 30000);
+const defaultIntervalMs = 30000;
 const retentionDays = Math.max(1, Math.round(Number(process.env.IONBRIDGE_RETENTION_DAYS ?? 30)));
 const passwordHash = process.env.IONBRIDGE_PASSWORD
   ? createHash("sha256").update(process.env.IONBRIDGE_PASSWORD).digest("hex")
@@ -25,18 +24,21 @@ process.on("unhandledRejection", (error) => {
 });
 
 let config = {
-  targetUrl: normalizeTarget(defaultTarget),
-  refreshIntervalMs: clampInterval(defaultIntervalMs),
+  targetUrl: "",
+  refreshIntervalMs: defaultIntervalMs,
+  targets: [],
 };
-let collectorTimer;
+const collectorTimers = new Map();
+const collectingTargets = new Set();
 let lastPruneAt = 0;
-let collecting = false;
 
 await mkdir(dataDir, { recursive: true });
 const db = openDatabase(databasePath);
 await migrateJsonlHistory();
+await migrateLegacyConfig();
 config = await loadConfig();
-startCollector();
+pruneHistory(Date.now(), true);
+startCollectors();
 
 const server = createServer(async (req, res) => {
   try {
@@ -58,6 +60,11 @@ const server = createServer(async (req, res) => {
       if (req.method === "PUT") return handleConfig(req, res);
     }
 
+    if (url.pathname === "/api/targets") {
+      if (req.method === "GET") return sendJson(res, { targets: listTargets(), activeTargetUrl: getSetting("active_target_url", "") });
+      if (req.method === "DELETE") return handleDeleteTarget(url, res);
+    }
+
     if (url.pathname === "/api/history") return handleHistory(url, res);
     if (url.pathname.startsWith("/device-proxy")) return proxyRequest(req, res, url);
     if (url.pathname.startsWith("/device")) return proxyCurrentTarget(req, res, url);
@@ -70,25 +77,35 @@ const server = createServer(async (req, res) => {
 server.listen(Number(process.env.PORT ?? 18318), "0.0.0.0");
 
 async function loadConfig() {
-  try {
-    const raw = await readFile(configPath, "utf8");
-    const parsed = parseConfig(raw);
-    const nextConfig = normalizeConfig(parsed);
-    if (raw.trim() !== JSON.stringify(nextConfig, null, 2)) {
-      await saveConfig(nextConfig);
-    }
-    return nextConfig;
-  } catch {
-    await saveConfig(config);
-    return config;
-  }
+  const targets = listTargets();
+  const active = getSetting("active_target_url", targets[0]?.targetUrl ?? "");
+  const activeTarget = targets.some((target) => target.targetUrl === active) ? active : targets[0]?.targetUrl ?? "";
+  const activeEntry = targets.find((target) => target.targetUrl === activeTarget);
+  if (activeTarget !== active) setSetting("active_target_url", activeTarget);
+  return {
+    targetUrl: activeTarget,
+    refreshIntervalMs: activeEntry?.refreshIntervalMs ?? clampInterval(Number(getSetting("refresh_interval_ms", defaultIntervalMs))),
+    targets,
+  };
 }
 
-async function saveConfig(nextConfig) {
-  await mkdir(dataDir, { recursive: true });
-  const tmpPath = `${configPath}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
-  await writeFile(tmpPath, `${JSON.stringify(normalizeConfig(nextConfig), null, 2)}\n`, { flag: "wx" });
-  await rename(tmpPath, configPath);
+async function migrateLegacyConfig() {
+  if (!existsSync(configPath)) return;
+  const marker = "legacy-config-v1";
+  if (db.prepare("SELECT key FROM migrations WHERE key = ?").get(marker)) return;
+  try {
+    const raw = parseConfig(await readFile(configPath, "utf8"));
+    const targetUrl = normalizeTarget(raw?.targetUrl);
+    const refreshIntervalMs = clampInterval(Number(raw?.refreshIntervalMs ?? defaultIntervalMs));
+    if (targetUrl) {
+      upsertTarget({ targetUrl, refreshIntervalMs, active: true });
+      setSetting("refresh_interval_ms", refreshIntervalMs);
+      setSetting("active_target_url", targetUrl);
+    }
+  } catch {
+    // A broken legacy config should not prevent the SQLite-backed service from starting.
+  }
+  db.prepare("INSERT INTO migrations (key, applied_at) VALUES (?, ?)").run(marker, Date.now());
 }
 
 function parseConfig(raw) {
@@ -135,38 +152,37 @@ function firstJsonObject(raw) {
   return null;
 }
 
-function normalizeConfig(raw) {
-  return {
-    targetUrl: normalizeTarget(raw?.targetUrl ?? defaultTarget),
-    refreshIntervalMs: clampInterval(Number(raw?.refreshIntervalMs ?? defaultIntervalMs)),
-  };
+function startCollectors() {
+  for (const timer of collectorTimers.values()) clearInterval(timer);
+  collectorTimers.clear();
+  for (const target of listTargets().filter((item) => item.enabled)) {
+    runCollector(target.targetUrl);
+    collectorTimers.set(target.targetUrl, setInterval(() => runCollector(target.targetUrl), target.refreshIntervalMs));
+  }
 }
 
-function startCollector() {
-  if (collectorTimer) clearInterval(collectorTimer);
-  runCollector();
-  collectorTimer = setInterval(runCollector, config.refreshIntervalMs);
-}
-
-function runCollector() {
-  collectOnce().catch((error) => {
-    console.warn("[ionbridge] metrics collection failed:", error);
+function runCollector(targetUrl) {
+  collectOnce(targetUrl).catch(async (error) => {
+    markTargetStatus(targetUrl, "offline", error instanceof Error ? error.message : "collection failed");
+    config = await loadConfig();
   });
 }
 
-async function collectOnce() {
-  if (collecting) return;
-  collecting = true;
+async function collectOnce(targetUrl) {
+  const normalizedTarget = normalizeTarget(targetUrl);
+  if (collectingTargets.has(normalizedTarget)) return;
+  collectingTargets.add(normalizedTarget);
   try {
-    const metrics = await fetchJson(new URL("/metrics.json", config.targetUrl).toString(), 8000);
+    const metrics = await fetchJson(new URL("/metrics.json", normalizedTarget).toString(), 8000);
     const ts = Date.now();
-    const machineInfo = await fetchMachineInfo(config.targetUrl).catch(() => null);
-    const deviceKey = resolveDeviceKey(config.targetUrl, machineInfo);
-    upsertDevice({ deviceKey, machineInfo, target: config.targetUrl, ts });
+    const machineInfo = await fetchMachineInfo(normalizedTarget).catch(() => null);
+    const deviceKey = resolveDeviceKey(normalizedTarget, machineInfo);
+    if (deviceKey) upsertDevice({ deviceKey, machineInfo, target: normalizedTarget, ts });
+    markTargetStatus(normalizedTarget, "online", null, { deviceKey, seenAt: ts });
     insertSamples(metrics.ports.map((port) => ({
       device_key: deviceKey,
       ts,
-      target: config.targetUrl,
+      target: normalizedTarget,
       port: port.id,
       voltage: port.voltage,
       current: port.current,
@@ -177,9 +193,10 @@ async function collectOnce() {
     })));
     pruneHistory(ts);
   } catch {
-    // Keep the service running. The next interval retries.
+    markTargetStatus(normalizedTarget, "offline", "target unreachable");
   } finally {
-    collecting = false;
+    config = await loadConfig();
+    collectingTargets.delete(normalizedTarget);
   }
 }
 
@@ -215,9 +232,37 @@ function openDatabase(path) {
       key TEXT PRIMARY KEY,
       applied_at INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS targets (
+      target_url TEXT PRIMARY KEY,
+      label TEXT,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      refresh_interval_ms INTEGER NOT NULL DEFAULT 30000,
+      device_key TEXT,
+      last_status TEXT NOT NULL DEFAULT 'unknown',
+      last_error TEXT,
+      last_seen INTEGER,
+      last_sample_at INTEGER,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
   `);
   ensureColumn(database, "samples", "device_key", "TEXT");
-  database.prepare("UPDATE samples SET device_key = target WHERE device_key IS NULL OR device_key = ''").run();
+  ensureColumn(database, "targets", "label", "TEXT");
+  ensureColumn(database, "targets", "enabled", "INTEGER NOT NULL DEFAULT 1");
+  ensureColumn(database, "targets", "refresh_interval_ms", "INTEGER NOT NULL DEFAULT 30000");
+  ensureColumn(database, "targets", "device_key", "TEXT");
+  ensureColumn(database, "targets", "last_status", "TEXT NOT NULL DEFAULT 'unknown'");
+  ensureColumn(database, "targets", "last_error", "TEXT");
+  ensureColumn(database, "targets", "last_seen", "INTEGER");
+  ensureColumn(database, "targets", "last_sample_at", "INTEGER");
+  ensureColumn(database, "targets", "created_at", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn(database, "targets", "updated_at", "INTEGER NOT NULL DEFAULT 0");
+  database.prepare("UPDATE samples SET device_key = NULL WHERE device_key = '' OR device_key LIKE 'http://%' OR device_key LIKE 'https://%'").run();
+  database.prepare("DELETE FROM devices WHERE device_key LIKE 'http://%' OR device_key LIKE 'https://%'").run();
   return database;
 }
 
@@ -226,6 +271,66 @@ function ensureColumn(database, table, column, type) {
   if (!columns.some((info) => info.name === column)) {
     database.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
   }
+}
+
+function getSetting(key, fallback) {
+  return db.prepare("SELECT value FROM settings WHERE key = ?").get(key)?.value ?? fallback;
+}
+
+function setSetting(key, value) {
+  db.prepare(`
+    INSERT INTO settings (key, value) VALUES (?, ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+  `).run(key, String(value));
+}
+
+function listTargets() {
+  return db.prepare(`
+    SELECT target_url targetUrl, label, enabled, refresh_interval_ms refreshIntervalMs,
+      device_key deviceKey, last_status lastStatus, last_error lastError,
+      last_seen lastSeen, last_sample_at lastSampleAt
+    FROM targets
+    ORDER BY updated_at DESC, created_at DESC
+  `).all().map((target) => ({
+    ...target,
+    enabled: Boolean(target.enabled),
+    refreshIntervalMs: clampInterval(Number(target.refreshIntervalMs)),
+  }));
+}
+
+function upsertTarget({ targetUrl, refreshIntervalMs, active }) {
+  const normalizedTarget = normalizeTarget(targetUrl);
+  if (!normalizedTarget) throw new Error("targetUrl is required");
+  const now = Date.now();
+  db.prepare(`
+    INSERT INTO targets (target_url, enabled, refresh_interval_ms, created_at, updated_at)
+    VALUES (?, 1, ?, ?, ?)
+    ON CONFLICT(target_url) DO UPDATE SET
+      enabled = 1,
+      refresh_interval_ms = excluded.refresh_interval_ms,
+      updated_at = excluded.updated_at
+  `).run(normalizedTarget, clampInterval(Number(refreshIntervalMs ?? defaultIntervalMs)), now, now);
+  if (active) setSetting("active_target_url", normalizedTarget);
+}
+
+function markTargetStatus(targetUrl, status, error, details = {}) {
+  const normalizedTarget = normalizeTarget(targetUrl);
+  const now = Date.now();
+  db.prepare(`
+    UPDATE targets
+    SET last_status = ?, last_error = ?, device_key = COALESCE(?, device_key),
+      last_seen = COALESCE(?, last_seen), last_sample_at = COALESCE(?, last_sample_at),
+      updated_at = ?
+    WHERE target_url = ?
+  `).run(
+    status,
+    error,
+    details.deviceKey ?? null,
+    details.seenAt ?? null,
+    status === "online" ? details.seenAt ?? now : null,
+    now,
+    normalizedTarget,
+  );
 }
 
 function insertSamples(rows) {
@@ -268,7 +373,7 @@ async function fetchMachineInfo(target) {
 }
 
 function resolveDeviceKey(target, machineInfo) {
-  return normalizeDeviceKey(machineInfo?.psn) ?? normalizeTarget(target);
+  return normalizeDeviceKey(machineInfo?.psn);
 }
 
 function normalizeDeviceKey(value) {
@@ -298,12 +403,12 @@ function upsertDevice({ deviceKey, machineInfo, target, ts }) {
   db.prepare(`
     UPDATE samples
     SET device_key = ?
-    WHERE target = ? AND (device_key IS NULL OR device_key = '' OR device_key = target)
+    WHERE target = ? AND (device_key IS NULL OR device_key = '')
   `).run(deviceKey, normalizeTarget(target));
 }
 
-function pruneHistory(now) {
-  if (now - lastPruneAt < 60 * 60 * 1000) return;
+function pruneHistory(now, force = false) {
+  if (!force && now - lastPruneAt < 60 * 60 * 1000) return;
   lastPruneAt = now;
   const cutoff = now - retentionDays * 24 * 60 * 60 * 1000;
   db.prepare("DELETE FROM samples WHERE ts < ?").run(cutoff);
@@ -324,7 +429,7 @@ async function migrateJsonlHistory() {
       try {
         const parsed = JSON.parse(line);
         rows.push({
-          device_key: normalizeTarget(parsed.target),
+          device_key: normalizeDeviceKey(parsed.psn),
           ts: parsed.ts,
           target: parsed.target,
           port: parsed.port,
@@ -353,9 +458,9 @@ async function handleHistory(url, res) {
   const now = Date.now();
   const start = startParam ?? now - hours * 60 * 60 * 1000;
   const end = endParam ?? now;
-  const deviceKey = resolveHistoryDeviceKey(target);
-  const rows = queryHistory({ deviceKey, start, end, portFilter });
-  sendJson(res, { target, deviceKey, hours, start, end, rows });
+  const historyKey = resolveHistoryKey(target);
+  const rows = queryHistory({ ...historyKey, start, end, portFilter });
+  sendJson(res, { target, deviceKey: historyKey.deviceKey, hours, start, end, rows });
 }
 
 function parseOptionalTimestamp(value) {
@@ -364,7 +469,7 @@ function parseOptionalTimestamp(value) {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
-function resolveHistoryDeviceKey(target) {
+function resolveHistoryKey(target) {
   const normalizedTarget = normalizeTarget(target);
   const device = db.prepare(`
     SELECT device_key FROM devices
@@ -372,41 +477,71 @@ function resolveHistoryDeviceKey(target) {
     ORDER BY last_seen DESC
     LIMIT 1
   `).get(normalizedTarget);
-  if (device?.device_key) return device.device_key;
+  if (device?.device_key) return { deviceKey: device.device_key, target: normalizedTarget };
 
   const sample = db.prepare(`
     SELECT device_key FROM samples
-    WHERE target = ?
+    WHERE target = ? AND device_key IS NOT NULL AND device_key != ''
     ORDER BY ts DESC
     LIMIT 1
   `).get(normalizedTarget);
-  return sample?.device_key ?? normalizedTarget;
+  return { deviceKey: sample?.device_key ?? null, target: normalizedTarget };
 }
 
-function queryHistory({ deviceKey, start, end, portFilter }) {
+function queryHistory({ deviceKey, target, start, end, portFilter }) {
+  const identityWhere = deviceKey ? "(device_key = ? OR target = ?)" : "target = ?";
   const sql = portFilter
     ? `SELECT ts, target, port, voltage, current, temperature_c, power_w, attached, protocol
        FROM samples
-       WHERE device_key = ? AND port = ? AND ts >= ? AND ts <= ?
+       WHERE ${identityWhere} AND port = ? AND ts >= ? AND ts <= ?
        ORDER BY ts ASC`
     : `SELECT ts, target, port, voltage, current, temperature_c, power_w, attached, protocol
        FROM samples
-       WHERE device_key = ? AND ts >= ? AND ts <= ?
+       WHERE ${identityWhere} AND ts >= ? AND ts <= ?
        ORDER BY ts ASC`;
+  const identityArgs = deviceKey ? [deviceKey, target] : [target];
   const rows = portFilter
-    ? db.prepare(sql).all(deviceKey, Number(portFilter), start, end)
-    : db.prepare(sql).all(deviceKey, start, end);
+    ? db.prepare(sql).all(...identityArgs, Number(portFilter), start, end)
+    : db.prepare(sql).all(...identityArgs, start, end);
   return rows.map((row) => ({ ...row, attached: Boolean(row.attached) }));
 }
 
 async function handleConfig(req, res) {
   const body = await readJson(req);
-  config = {
-    targetUrl: normalizeTarget(body.targetUrl ?? config.targetUrl),
-    refreshIntervalMs: clampInterval(Number(body.refreshIntervalMs ?? config.refreshIntervalMs)),
-  };
-  await saveConfig(config);
-  startCollector();
+  const targetUrl = normalizeTarget(body.targetUrl ?? config.targetUrl);
+  if (!targetUrl) return sendJson(res, { error: "targetUrl is required" }, 400);
+  const refreshIntervalMs = clampInterval(Number(body.refreshIntervalMs ?? config.refreshIntervalMs));
+  upsertTarget({ targetUrl, refreshIntervalMs, active: true });
+  setSetting("refresh_interval_ms", refreshIntervalMs);
+  config = await loadConfig();
+  startCollectors();
+  sendJson(res, config);
+}
+
+async function handleDeleteTarget(url, res) {
+  const target = url.searchParams.get("target");
+  if (!target) return sendJson(res, { error: "missing target" }, 400);
+  const targetUrl = normalizeTarget(target);
+  const { deviceKey } = resolveHistoryKey(targetUrl);
+  if (collectorTimers.has(targetUrl)) {
+    clearInterval(collectorTimers.get(targetUrl));
+    collectorTimers.delete(targetUrl);
+  }
+  db.prepare("DELETE FROM targets WHERE target_url = ?").run(targetUrl);
+  db.prepare("DELETE FROM samples WHERE target = ?").run(targetUrl);
+  if (deviceKey) {
+    const remainingSamples = db.prepare("SELECT 1 FROM samples WHERE device_key = ? LIMIT 1").get(deviceKey);
+    const remainingTargets = db.prepare("SELECT 1 FROM targets WHERE device_key = ? LIMIT 1").get(deviceKey);
+    if (!remainingSamples && !remainingTargets) {
+      db.prepare("DELETE FROM devices WHERE device_key = ?").run(deviceKey);
+    }
+  }
+  if (getSetting("active_target_url", "") === targetUrl) {
+    const nextTarget = listTargets()[0]?.targetUrl ?? "";
+    setSetting("active_target_url", nextTarget);
+  }
+  config = await loadConfig();
+  startCollectors();
   sendJson(res, config);
 }
 
@@ -438,6 +573,7 @@ function sessionPayload(req) {
 
 async function proxyCurrentTarget(req, res, url) {
   const path = url.pathname.replace(/^\/device/, "") || "/";
+  if (!config.targetUrl) return sendJson(res, { error: "target not configured" }, 404);
   const targetUrl = new URL(`${path}${url.search}`, config.targetUrl);
   return proxyFetch(req, res, targetUrl);
 }
@@ -521,7 +657,8 @@ function sendText(res, text, status = 200) {
 }
 
 function normalizeTarget(target) {
-  const trimmed = String(target || defaultTarget).trim().replace(/\/+$/, "");
+  const trimmed = String(target || "").trim().replace(/\/+$/, "");
+  if (!trimmed) return "";
   return /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
 }
 

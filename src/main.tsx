@@ -30,6 +30,8 @@ import {
   login,
   normalizeDeviceTarget,
   saveServerConfig,
+  deleteSavedTarget,
+  type SavedTarget,
 } from "./api";
 import {
   deviceProfiles,
@@ -102,6 +104,7 @@ function useDashboardData(targetUrl: string, refreshIntervalMs: number) {
     let alive = true;
     setData(null);
     setUpdatedAt(null);
+    if (!targetUrl.trim()) return;
 
     async function refresh() {
       const next = await fetchDashboardData(targetUrl);
@@ -150,7 +153,9 @@ function Header({
   updatedAt,
   targetUrl,
   refreshIntervalMs,
+  savedTargets,
   onApply,
+  onDeleteTarget,
 }: {
   metrics: Metrics;
   profile: DeviceVisualProfile;
@@ -158,7 +163,9 @@ function Header({
   updatedAt: Date | null;
   targetUrl: string;
   refreshIntervalMs: number;
-  onApply: (targetUrl: string, refreshIntervalMs: number) => void;
+  savedTargets: SavedTarget[];
+  onApply: (targetUrl: string, refreshIntervalMs: number) => void | Promise<void>;
+  onDeleteTarget: (targetUrl: string) => void | Promise<void>;
 }) {
   const totalPower = metrics.ports.reduce((sum, port) => sum + watts(port), 0);
   const hottest = Math.max(...metrics.ports.map((port) => port.die_temperature));
@@ -193,7 +200,7 @@ function Header({
         </div>
         <div className={`live-chip ${source}`}>
           <span />
-          {source === "device" ? "Live" : "Mock"}
+          {source === "device" ? "Live" : source === "offline" ? "Offline" : "Mock"}
           {updatedAt ? ` ${updatedAt.toLocaleTimeString("zh-CN", { hour12: false })}` : ""}
         </div>
         <DeviceTargetControl
@@ -201,8 +208,67 @@ function Header({
           targetUrl={targetUrl}
           onApply={onApply}
         />
+        <SavedTargetsMenu
+          activeTargetUrl={targetUrl}
+          targets={savedTargets}
+          onSelect={(target) => onApply(target.targetUrl, target.refreshIntervalMs)}
+          onDelete={onDeleteTarget}
+        />
       </div>
     </header>
+  );
+}
+
+function SavedTargetsMenu({
+  activeTargetUrl,
+  targets,
+  onSelect,
+  onDelete,
+}: {
+  activeTargetUrl: string;
+  targets: SavedTarget[];
+  onSelect: (target: SavedTarget) => void | Promise<void>;
+  onDelete: (targetUrl: string) => void | Promise<void>;
+}) {
+  const [isDeleting, setIsDeleting] = React.useState("");
+  if (targets.length === 0) return null;
+
+  return (
+    <div className="saved-targets" aria-label="已保存设备地址">
+      {targets.map((target) => {
+        const isActive = normalizeDeviceTarget(activeTargetUrl) === target.targetUrl;
+        return (
+          <div className={`saved-target ${isActive ? "active" : ""}`} key={target.targetUrl}>
+            <button
+              className="saved-target-main"
+              type="button"
+              onClick={() => onSelect(target)}
+              title={target.lastError ?? target.targetUrl}
+            >
+              <span className={`saved-target-dot ${target.lastStatus}`} />
+              <strong>{target.deviceKey ?? target.label ?? target.targetUrl.replace(/^https?:\/\//, "")}</strong>
+              <em>{target.lastStatus}</em>
+            </button>
+            <button
+              className="saved-target-delete"
+              disabled={isDeleting === target.targetUrl}
+              type="button"
+              onClick={async () => {
+                setIsDeleting(target.targetUrl);
+                try {
+                  await onDelete(target.targetUrl);
+                } finally {
+                  setIsDeleting("");
+                }
+              }}
+              title="移除保存地址和该地址历史数据"
+            >
+              ×
+            </button>
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
@@ -303,14 +369,18 @@ function LoginScreen({ onLogin }: { onLogin: () => void }) {
 function TargetSetupScreen({
   targetUrl,
   refreshIntervalMs,
+  savedTargets = [],
   state = "offline",
   onApply,
+  onDeleteTarget,
   onRetry,
 }: {
   targetUrl: string;
   refreshIntervalMs: number;
+  savedTargets?: SavedTarget[];
   state?: "connecting" | "offline";
   onApply: (targetUrl: string, refreshIntervalMs: number) => void | Promise<void>;
+  onDeleteTarget?: (targetUrl: string) => void | Promise<void>;
   onRetry: () => void;
 }) {
   const isConnecting = state === "connecting";
@@ -331,6 +401,12 @@ function TargetSetupScreen({
           refreshIntervalMs={refreshIntervalMs}
           targetUrl={targetUrl}
           onApply={onApply}
+        />
+        <SavedTargetsMenu
+          activeTargetUrl={targetUrl}
+          targets={savedTargets}
+          onSelect={(target) => onApply(target.targetUrl, target.refreshIntervalMs)}
+          onDelete={onDeleteTarget ?? (() => undefined)}
         />
         <button
           className="retry-button"
@@ -1438,6 +1514,7 @@ function RuntimePanel({ metrics, heap }: { metrics: Metrics; heap: HeapMetrics }
 function App() {
   const [targetUrl, setTargetUrl] = React.useState(readDeviceTarget);
   const [refreshIntervalMs, setRefreshIntervalMs] = React.useState(readRefreshInterval);
+  const [savedTargets, setSavedTargets] = React.useState<SavedTarget[]>([]);
   const { ready, passwordRequired, setPasswordRequired } = useServerSettings();
   const { data, updatedAt, retry } = useDashboardData(targetUrl, refreshIntervalMs);
   const [activeProfileKey, setActiveProfileKey] = React.useState<string | null>(null);
@@ -1453,6 +1530,7 @@ function App() {
       const saved = await saveServerConfig({ targetUrl: nextTargetUrl, refreshIntervalMs: clamped });
       const savedTarget = normalizeDeviceTarget(saved.targetUrl);
       const savedInterval = clampRefreshInterval(saved.refreshIntervalMs);
+      setSavedTargets(saved.targets);
       setTargetUrl(savedTarget);
       setRefreshIntervalMs(savedInterval);
       writeDeviceTarget(savedTarget);
@@ -1462,17 +1540,43 @@ function App() {
     }
   }
 
+  async function handleDeleteSavedTarget(targetToDelete: string) {
+    const saved = await deleteSavedTarget(targetToDelete);
+    setSavedTargets(saved.targets);
+    if (saved.targetUrl) {
+      const nextTarget = normalizeDeviceTarget(saved.targetUrl);
+      const nextInterval = clampRefreshInterval(saved.refreshIntervalMs);
+      setTargetUrl(nextTarget);
+      setRefreshIntervalMs(nextInterval);
+      writeDeviceTarget(nextTarget);
+      writeRefreshInterval(nextInterval);
+    } else {
+      setTargetUrl("");
+    }
+  }
+
   React.useEffect(() => {
     getServerSession().then((session) => {
       if (!session || !session.authenticated) return;
-      const serverTarget = normalizeDeviceTarget(session.config.targetUrl);
       const serverInterval = clampRefreshInterval(session.config.refreshIntervalMs);
-      setTargetUrl(serverTarget);
+      setSavedTargets(session.config.targets);
       setRefreshIntervalMs(serverInterval);
-      writeDeviceTarget(serverTarget);
       writeRefreshInterval(serverInterval);
+      if (session.config.targetUrl) {
+        const serverTarget = normalizeDeviceTarget(session.config.targetUrl);
+        setTargetUrl(serverTarget);
+        writeDeviceTarget(serverTarget);
+      }
     });
   }, [passwordRequired]);
+
+  React.useEffect(() => {
+    if (passwordRequired) return;
+    getServerSession().then((session) => {
+      if (!session || !session.authenticated) return;
+      setSavedTargets(session.config.targets);
+    });
+  }, [updatedAt, passwordRequired]);
 
   if (!ready) {
     return <main className="loading">ingBar warming up...</main>;
@@ -1486,9 +1590,11 @@ function App() {
     return (
       <TargetSetupScreen
         refreshIntervalMs={refreshIntervalMs}
-        state="connecting"
+        state={targetUrl.trim() ? "connecting" : "offline"}
         targetUrl={targetUrl}
+        savedTargets={savedTargets}
         onApply={handleConnectionSettingsApply}
+        onDeleteTarget={handleDeleteSavedTarget}
         onRetry={retry}
       />
     );
@@ -1500,7 +1606,9 @@ function App() {
       <TargetSetupScreen
         refreshIntervalMs={refreshIntervalMs}
         targetUrl={targetUrl}
+        savedTargets={savedTargets}
         onApply={handleConnectionSettingsApply}
+        onDeleteTarget={handleDeleteSavedTarget}
         onRetry={retry}
       />
     );
@@ -1519,8 +1627,10 @@ function App() {
         source={source}
         targetUrl={targetUrl}
         refreshIntervalMs={refreshIntervalMs}
+        savedTargets={savedTargets}
         updatedAt={updatedAt}
         onApply={handleConnectionSettingsApply}
+        onDeleteTarget={handleDeleteSavedTarget}
       />
       <ProfileSwitcher
         activeProfile={activeProfile}

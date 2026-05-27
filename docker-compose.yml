@@ -7,8 +7,6 @@ services:
     ports:
       - "18318:18318"
     environment:
-      IONBRIDGE_TARGET: "http://192.168.217.161"
-      IONBRIDGE_REFRESH_MS: "30000"
       IONBRIDGE_RETENTION_DAYS: "30"
       # 设置后启用登录保护。
       # IONBRIDGE_PASSWORD: "change-me"

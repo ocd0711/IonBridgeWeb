@@ -1,5 +1,5 @@
 import { mockHeap, mockHistory, mockMachineInfo, mockMetrics } from "./mock";
-import type { HeapMetrics, MachineInfo, Metrics, PortHistory } from "./types";
+import type { HeapMetrics, MachineInfo, Metrics, PortHistory, PortMetrics } from "./types";
 
 const DEFAULT_DEVICE_TARGET = "http://192.168.217.161";
 const endpoint = (path: string, targetUrl: string) => {
@@ -33,7 +33,20 @@ export type ServerSession = {
   config: {
     targetUrl: string;
     refreshIntervalMs: number;
+    targets: SavedTarget[];
   };
+};
+
+export type SavedTarget = {
+  targetUrl: string;
+  label: string | null;
+  enabled: boolean;
+  refreshIntervalMs: number;
+  deviceKey: string | null;
+  lastStatus: "online" | "offline" | "unknown";
+  lastError: string | null;
+  lastSeen: number | null;
+  lastSampleAt: number | null;
 };
 
 export type ServerHistoryRow = {
@@ -82,6 +95,15 @@ export async function saveServerConfig(config: { targetUrl: string; refreshInter
   return response.json() as Promise<ServerSession["config"]>;
 }
 
+export async function deleteSavedTarget(targetUrl: string) {
+  const params = new URLSearchParams({ target: normalizeDeviceTarget(targetUrl) });
+  const response = await fetch(`/api/targets?${params.toString()}`, { method: "DELETE" });
+  if (!response.ok) {
+    throw new Error("Failed to delete target");
+  }
+  return response.json() as Promise<ServerSession["config"]>;
+}
+
 export async function fetchServerHistory({
   targetUrl,
   hours,
@@ -107,6 +129,14 @@ export async function fetchServerHistory({
   if (!response.ok) throw new Error("Server history unavailable");
   const payload = await response.json() as { rows?: ServerHistoryRow[] };
   return payload.rows ?? [];
+}
+
+async function fetchRecentServerHistory(targetUrl: string): Promise<ServerHistoryRow[]> {
+  try {
+    return fetchServerHistory({ targetUrl, hours: 720, port: null });
+  } catch {
+    return [];
+  }
 }
 
 async function getJson<T>(path: string, targetUrl: string, timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> {
@@ -173,7 +203,7 @@ export async function fetchDashboardData(targetUrl = DEFAULT_DEVICE_TARGET): Pro
   history: PortHistory;
   heap: HeapMetrics;
   machineInfo: MachineInfo;
-  source: "device" | "mock";
+  source: "device" | "offline" | "mock";
 }> {
   const normalizedTarget = normalizeDeviceTarget(targetUrl);
   try {
@@ -191,6 +221,18 @@ export async function fetchDashboardData(targetUrl = DEFAULT_DEVICE_TARGET): Pro
 
     return { metrics, history: mergeHistory(history, metrics, normalizedTarget), heap, machineInfo, source: "device" };
   } catch {
+    const rows = await fetchRecentServerHistory(normalizedTarget);
+    if (rows.length > 0) {
+      const metrics = offlineMetricsFromHistory(rows);
+      const history = historyFromServerRows(rows);
+      return {
+        metrics,
+        history,
+        heap: mockHeap,
+        machineInfo: readCachedMachineInfo(normalizedTarget) ?? inferMachineInfo(metrics),
+        source: "offline",
+      };
+    }
     return {
       metrics: mockMetrics,
       history: mockHistory,
@@ -199,6 +241,52 @@ export async function fetchDashboardData(targetUrl = DEFAULT_DEVICE_TARGET): Pro
       source: "mock",
     };
   }
+}
+
+function offlineMetricsFromHistory(rows: ServerHistoryRow[]): Metrics {
+  const latestTs = Math.max(...rows.map((row) => row.ts));
+  const latestRows = rows.filter((row) => row.ts === latestTs);
+  const ports: PortMetrics[] = latestRows.map((row) => ({
+    id: row.port,
+    active: false,
+    state: row.attached ? "LAST_ATTACHED" : "LAST_IDLE",
+    port_type: row.port === 0 ? "A" as const : "C" as const,
+    attached: row.attached,
+    charging_duration_seconds: 0,
+    fc_protocol: Number.parseFloat(row.protocol) || 0,
+    current: row.current,
+    voltage: row.voltage,
+    die_temperature: row.temperature_c,
+    vin_value: 0,
+    session_id: 0,
+    session_charge: 0,
+    power_budget: 0,
+    pd_status: null,
+  })).sort((a, b) => a.id - b.id);
+
+  return {
+    ...mockMetrics,
+    ports,
+    wifi: { ...mockMetrics.wifi, rssi: 0 },
+    system: { ...mockMetrics.system, boot_time_seconds: 0 },
+    tasks: [],
+  };
+}
+
+function historyFromServerRows(rows: ServerHistoryRow[]): PortHistory {
+  const byPort = new Map<number, Array<{ voltage: number; current: number; temperature_c: number; ts: number }>>();
+  for (const row of rows) {
+    const samples = byPort.get(row.port) ?? [];
+    samples.push({ voltage: row.voltage, current: row.current, temperature_c: row.temperature_c, ts: row.ts });
+    byPort.set(row.port, samples);
+  }
+  return {
+    sample_period_ms: 30000,
+    ports: Array.from(byPort.entries()).map(([port, samples]) => ({
+      port,
+      samples: samples.sort((a, b) => a.ts - b.ts).slice(-360),
+    })),
+  };
 }
 
 function liveOnlyHistory(metrics: Metrics): PortHistory {

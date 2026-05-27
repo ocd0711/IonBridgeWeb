@@ -237,6 +237,11 @@ h1 {
   box-shadow: 0 0 0 5px rgba(243, 109, 22, 0.15);
 }
 
+.live-chip.offline span {
+  background: #9d8f82;
+  box-shadow: 0 0 0 5px rgba(117, 102, 87, 0.16);
+}
+
 .target-control {
   display: inline-flex;
   min-height: 40px;
@@ -283,6 +288,93 @@ h1 {
   font-size: 11px;
   font-weight: 900;
   cursor: pointer;
+}
+
+.saved-targets {
+  display: flex;
+  max-width: min(100%, 720px);
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.saved-target {
+  display: inline-flex;
+  min-height: 36px;
+  overflow: hidden;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  background: rgba(255, 253, 250, 0.75);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.8) inset;
+}
+
+.saved-target.active {
+  border-color: rgba(243, 109, 22, 0.52);
+  background: rgba(255, 157, 46, 0.13);
+}
+
+.saved-target-main,
+.saved-target-delete {
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.saved-target-main {
+  display: inline-flex;
+  max-width: 260px;
+  align-items: center;
+  gap: 7px;
+  padding: 0 9px;
+}
+
+.saved-target-main strong {
+  overflow: hidden;
+  font-family: "SF Mono", "Cascadia Code", monospace;
+  font-size: 11px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.saved-target-main em {
+  color: var(--muted);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.saved-target-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: #9d8f82;
+}
+
+.saved-target-dot.online {
+  background: var(--green);
+  box-shadow: 0 0 0 4px rgba(47, 128, 108, 0.12);
+}
+
+.saved-target-dot.offline {
+  background: var(--amber-strong);
+  box-shadow: 0 0 0 4px rgba(243, 109, 22, 0.12);
+}
+
+.saved-target-delete {
+  width: 28px;
+  border-left: 1px solid var(--hairline);
+  color: var(--muted);
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.saved-target-delete:disabled {
+  cursor: progress;
+  opacity: 0.55;
 }
 
 .device-panel {
@@ -1845,13 +1937,15 @@ h1 {
   .metric-pill,
   .live-chip,
   .target-control,
+  .saved-target,
   .history-filters label {
     background: rgba(35, 31, 27, 0.82);
     border-color: #463d34;
     box-shadow: 0 1px 0 rgba(255, 255, 255, 0.04) inset;
   }
 
-  .target-control button {
+  .target-control button,
+  .saved-target-delete {
     border-color: #463d34;
   }
 

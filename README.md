@@ -50,30 +50,27 @@ http://localhost:18318/
 
 ```yaml
 environment:
-  IONBRIDGE_TARGET: "http://192.168.217.161"
-  IONBRIDGE_REFRESH_MS: "30000"
   IONBRIDGE_RETENTION_DAYS: "30"
   IONBRIDGE_PASSWORD: "change-me"
 volumes:
   - ./data:/data
 ```
 
-- `IONBRIDGE_TARGET`: 初始设备地址，可以是 IP 或 mDNS 地址。
-- `IONBRIDGE_REFRESH_MS`: 服务端采集 metrics 的默认频率，默认 30000ms。
 - `IONBRIDGE_RETENTION_DAYS`: 服务端历史保留天数，默认 30 天。
 - `IONBRIDGE_PASSWORD`: 设置后启用登录保护；不设置则不要求登录。
 - `/data`: 持久化配置和历史数据。
 
-配置优先级：如果 `/data/config.json` 已存在，服务会优先使用持久化配置；环境变量只作为首次启动或配置文件不存在时的默认值。这样在面板里修改目标地址和刷新频率后，重启容器不会丢失配置。需要强制回到环境变量时，可以删除或编辑 `/data/config.json`。
+设备地址和采集频率不再通过环境变量配置。首次进入页面后，在右上角目标地址输入框保存目标；服务端会把目标列表、当前查看目标和采集频率写入 SQLite。
 
 容器内会保存：
 
 ```text
-/data/config.json
 /data/ionbridge.db
 ```
 
-历史数据写入 SQLite，并按设备 SN/PSN 建索引查询。IP 或 mDNS 只作为连接目标保存，设备换 IP 后不会丢失同一台设备的历史。
+历史数据写入 SQLite。只有设备首页 `window.__INFOZ` 里解析到的 PSN/SN 会作为设备唯一键；IP 或 mDNS 只作为连接目标保存，不会被当作设备唯一值。服务启动时会按当前 `IONBRIDGE_RETENTION_DAYS` 立即清理超出保留期的数据，之后后台也会周期清理。
+
+如果旧版本留下了 `/data/config.json`，服务会在首次启动时导入其中的目标地址和刷新频率到 SQLite；导入后运行时不再读取或写入这个 JSON 文件。
 
 ## 设备地址
 
@@ -85,20 +82,22 @@ http://192.168.217.161
 cp02s-1027249302340842.local
 ```
 
-不带协议时会自动补成 `http://`。点击 `Apply` 后会重新获取设备信息、实时 metrics、heap 和历史数据。当前地址会保存到浏览器 `localStorage`。
+不带协议时会自动补成 `http://`。点击 `保存并连接` 后会重新获取设备信息、实时 metrics、heap 和历史数据。当前地址会保存到浏览器 `localStorage`，生产服务模式下也会保存到 SQLite。
 
 开发模式下：
 
 - 默认地址 `http://192.168.217.161` 走 Vite `/device` 代理。
 - 其他地址走动态 `/device-proxy?target=...` 代理。
 
-Docker/生产服务模式下，地址会同时保存到 `/data/config.json`，后台采集器也会切换到新目标。
+Docker/生产服务模式下，所有已保存地址都会被后台同时采集。页面右上角会显示已保存目标列表，可以点击切换当前查看目标，也可以移除目标。移除目标会删除该地址和该地址采集到的历史样本；如果同一台 PSN 设备还有其他地址或样本，不会误删那台设备的其他历史。
+
+目标当前连不上但 SQLite 里已有历史样本时，页面仍会进入监控面板，实时状态显示为 `Offline`，历史图表和长时间筛选继续可用。只有当前地址既连不上、又没有任何历史样本时，才会进入目标地址配置页。
 
 ## 刷新频率
 
-地址右侧的数字输入框是 metrics 获取频率，单位为秒。默认是 `30s`，允许范围是 `1s` 到 `60s`。点击 `Apply` 后立即生效，并保存到 `localStorage`。
+地址右侧的数字输入框是 metrics 获取频率，单位为秒。默认是 `30s`，允许范围是 `1s` 到 `60s`。点击 `保存并连接` 后立即生效，并保存到 `localStorage`。
 
-Docker/生产服务模式下，这个频率也会同步到服务端后台采集器。
+Docker/生产服务模式下，这个频率也会同步到 SQLite，并用于对应目标的服务端后台采集器。
 
 如果请求失败，前端会对当前请求做多次递增间隔重试；本轮最终失败后会进入目标地址配置页，避免用 mock 数据误导用户。修改地址或点击重试后会继续尝试连接目标设备。
 
