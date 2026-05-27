@@ -81,7 +81,7 @@ async function loadConfig() {
   if ((activeEntry?.deviceKey ?? "") !== active) setSetting("active_device_key", activeEntry?.deviceKey ?? "");
   return {
     targetUrl: activeEntry?.targetUrl ?? "",
-    refreshIntervalMs: activeEntry?.refreshIntervalMs ?? clampInterval(Number(getSetting("refresh_interval_ms", defaultIntervalMs))),
+    refreshIntervalMs: activeEntry?.refreshIntervalMs ?? defaultIntervalMs,
     targets,
   };
 }
@@ -236,6 +236,7 @@ function openDatabase(path) {
     CREATE INDEX IF NOT EXISTS idx_targets_target_url ON targets(target_url);
   `);
   database.prepare("DELETE FROM settings WHERE key = ?").run("active_target_url");
+  database.prepare("DELETE FROM settings WHERE key = ?").run("refresh_interval_ms");
   return database;
 }
 
@@ -486,7 +487,6 @@ async function handleConfig(req, res) {
     }, 422);
   }
   upsertVerifiedTarget({ deviceKey, targetUrl, refreshIntervalMs, active: true });
-  setSetting("refresh_interval_ms", refreshIntervalMs);
   config = await loadConfig();
   startCollectors();
   sendJson(res, config);

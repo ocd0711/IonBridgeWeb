@@ -173,17 +173,6 @@ input {
   width: auto;
 }
 
-.retry-button {
-  min-height: 42px;
-  border: 1px solid var(--hairline);
-  border-radius: 8px;
-  background: rgba(255, 157, 46, 0.12);
-  color: var(--amber-strong);
-  font-weight: 900;
-  cursor: pointer;
-}
-
-.retry-button:disabled,
 .target-control input:disabled,
 .target-control button:disabled {
   cursor: progress;

@@ -221,7 +221,6 @@ function Header({
         <DeviceTargetControl
           disabled={connectionActionPending}
           busy={connectionActionPending}
-          mode={savedTargets.length > 0 ? "add" : "edit"}
           refreshIntervalMs={refreshIntervalMs}
           targetUrl={targetUrl}
           onApply={onApply}
@@ -322,24 +321,22 @@ function DeviceTargetControl({
   refreshIntervalMs,
   disabled = false,
   busy = false,
-  mode = "edit",
   onApply,
 }: {
   targetUrl: string;
   refreshIntervalMs: number;
   disabled?: boolean;
   busy?: boolean;
-  mode?: "edit" | "add";
   onApply: (targetUrl: string, refreshIntervalMs: number) => void | Promise<void>;
 }) {
-  const [draft, setDraft] = React.useState(mode === "add" ? "" : targetUrl);
+  const [draft, setDraft] = React.useState(targetUrl);
   const [intervalDraft, setIntervalDraft] = React.useState(String(refreshIntervalMs / 1000));
   const [isApplying, setIsApplying] = React.useState(false);
   const [error, setError] = React.useState("");
 
   React.useEffect(() => {
-    if (mode === "edit") setDraft(targetUrl);
-  }, [mode, targetUrl]);
+    setDraft(targetUrl);
+  }, [targetUrl]);
 
   React.useEffect(() => {
     setIntervalDraft(String(refreshIntervalMs / 1000));
@@ -356,7 +353,6 @@ function DeviceTargetControl({
         setError("");
         try {
           await onApply(normalizeDeviceTarget(draft), clampRefreshInterval(Number(intervalDraft) * 1000));
-          if (mode === "add") setDraft("");
         } catch (requestError) {
           setError(requestError instanceof Error ? requestError.message : "连接失败，未保存设备");
         } finally {
@@ -369,7 +365,7 @@ function DeviceTargetControl({
         disabled={isApplying || disabled}
         value={draft}
         onChange={(event) => setDraft(event.target.value)}
-        placeholder={mode === "add" ? "添加 IP / mDNS 地址" : "http://192.168.217.161"}
+        placeholder="http://192.168.217.161"
       />
       <input
         aria-label="metrics 获取频率秒"
@@ -384,7 +380,7 @@ function DeviceTargetControl({
       />
       <span className="target-unit">s</span>
       <button disabled={isApplying || disabled} type="submit">
-        {isApplying || busy ? "正在连接..." : mode === "add" ? "添加并连接" : "保存并连接"}
+        {isApplying || busy ? "正在连接..." : "保存并连接"}
       </button>
       {error ? <strong className="target-error">{error}</strong> : null}
     </form>
@@ -440,7 +436,6 @@ function TargetSetupScreen({
   onApply,
   onSelectSavedTarget,
   onDeleteTarget,
-  onRetry,
 }: {
   targetUrl: string;
   refreshIntervalMs: number;
@@ -450,11 +445,8 @@ function TargetSetupScreen({
   onApply: (targetUrl: string, refreshIntervalMs: number) => void | Promise<void>;
   onSelectSavedTarget: (target: SavedTarget) => void | Promise<void>;
   onDeleteTarget?: (targetUrl: string) => void | Promise<void>;
-  onRetry: () => void;
 }) {
   const isConnecting = state === "connecting";
-  const [isRetrying, setIsRetrying] = React.useState(false);
-  const retryDisabled = isRetrying || isConnecting || connectionActionPending;
   return (
     <main className="target-setup-screen">
       <section className="target-setup-card">
@@ -469,32 +461,18 @@ function TargetSetupScreen({
         </div>
         <SavedTargetsMenu
           activeTargetUrl={targetUrl}
-          disabled={connectionActionPending || isRetrying}
+          disabled={connectionActionPending || isConnecting}
           targets={savedTargets}
           onSelect={onSelectSavedTarget}
           onDelete={onDeleteTarget ?? (() => undefined)}
         />
         <DeviceTargetControl
-          disabled={connectionActionPending || isRetrying}
-          busy={connectionActionPending}
-          mode={savedTargets.length > 0 ? "add" : "edit"}
+          disabled={connectionActionPending || isConnecting}
+          busy={connectionActionPending || isConnecting}
           refreshIntervalMs={refreshIntervalMs}
           targetUrl={targetUrl}
           onApply={onApply}
         />
-        <button
-          className="retry-button"
-          disabled={retryDisabled}
-          type="button"
-          onClick={() => {
-            if (retryDisabled) return;
-            setIsRetrying(true);
-            onRetry();
-            window.setTimeout(() => setIsRetrying(false), 900);
-          }}
-        >
-          {isConnecting || connectionActionPending ? "正在连接..." : isRetrying ? "正在重试..." : "重试当前地址"}
-        </button>
       </section>
     </main>
   );
@@ -1719,7 +1697,6 @@ function App() {
         onApply={handleConnectionSettingsApply}
         onSelectSavedTarget={handleSavedTargetSelect}
         onDeleteTarget={handleDeleteSavedTarget}
-        onRetry={retry}
       />
     );
   }
@@ -1735,7 +1712,6 @@ function App() {
         onApply={handleConnectionSettingsApply}
         onSelectSavedTarget={handleSavedTargetSelect}
         onDeleteTarget={handleDeleteSavedTarget}
-        onRetry={retry}
       />
     );
   }
