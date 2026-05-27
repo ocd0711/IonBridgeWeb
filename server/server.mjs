@@ -292,15 +292,21 @@ async function migrateJsonlHistory() {
 async function handleHistory(url, res) {
   const target = normalizeTarget(url.searchParams.get("target") ?? config.targetUrl);
   const hours = Math.max(1, Math.min(24 * 30, Number(url.searchParams.get("hours") ?? 24)));
-  const startParam = Number(url.searchParams.get("start"));
-  const endParam = Number(url.searchParams.get("end"));
+  const startParam = parseOptionalTimestamp(url.searchParams.get("start"));
+  const endParam = parseOptionalTimestamp(url.searchParams.get("end"));
   const portFilter = url.searchParams.get("port");
   const now = Date.now();
-  const start = Number.isFinite(startParam) ? startParam : now - hours * 60 * 60 * 1000;
-  const end = Number.isFinite(endParam) ? endParam : now;
+  const start = startParam ?? now - hours * 60 * 60 * 1000;
+  const end = endParam ?? now;
   const deviceKey = resolveHistoryDeviceKey(target);
   const rows = queryHistory({ deviceKey, start, end, portFilter });
   sendJson(res, { target, deviceKey, hours, start, end, rows });
+}
+
+function parseOptionalTimestamp(value) {
+  if (value == null || value === "") return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 function resolveHistoryDeviceKey(target) {
