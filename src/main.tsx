@@ -150,8 +150,7 @@ function Header({
   updatedAt,
   targetUrl,
   refreshIntervalMs,
-  onTargetChange,
-  onRefreshIntervalChange,
+  onApply,
 }: {
   metrics: Metrics;
   profile: DeviceVisualProfile;
@@ -159,8 +158,7 @@ function Header({
   updatedAt: Date | null;
   targetUrl: string;
   refreshIntervalMs: number;
-  onTargetChange: (targetUrl: string) => void;
-  onRefreshIntervalChange: (refreshIntervalMs: number) => void;
+  onApply: (targetUrl: string, refreshIntervalMs: number) => void;
 }) {
   const totalPower = metrics.ports.reduce((sum, port) => sum + watts(port), 0);
   const hottest = Math.max(...metrics.ports.map((port) => port.die_temperature));
@@ -201,8 +199,7 @@ function Header({
         <DeviceTargetControl
           refreshIntervalMs={refreshIntervalMs}
           targetUrl={targetUrl}
-          onRefreshIntervalChange={onRefreshIntervalChange}
-          onTargetChange={onTargetChange}
+          onApply={onApply}
         />
       </div>
     </header>
@@ -212,13 +209,11 @@ function Header({
 function DeviceTargetControl({
   targetUrl,
   refreshIntervalMs,
-  onTargetChange,
-  onRefreshIntervalChange,
+  onApply,
 }: {
   targetUrl: string;
   refreshIntervalMs: number;
-  onTargetChange: (targetUrl: string) => void;
-  onRefreshIntervalChange: (refreshIntervalMs: number) => void;
+  onApply: (targetUrl: string, refreshIntervalMs: number) => void;
 }) {
   const [draft, setDraft] = React.useState(targetUrl);
   const [intervalDraft, setIntervalDraft] = React.useState(String(refreshIntervalMs / 1000));
@@ -236,8 +231,7 @@ function DeviceTargetControl({
       className="target-control"
       onSubmit={(event) => {
         event.preventDefault();
-        onTargetChange(normalizeDeviceTarget(draft));
-        onRefreshIntervalChange(clampRefreshInterval(Number(intervalDraft) * 1000));
+        onApply(normalizeDeviceTarget(draft), clampRefreshInterval(Number(intervalDraft) * 1000));
       }}
     >
       <input
@@ -300,32 +294,36 @@ function LoginScreen({ onLogin }: { onLogin: () => void }) {
 function TargetSetupScreen({
   targetUrl,
   refreshIntervalMs,
-  onTargetChange,
-  onRefreshIntervalChange,
+  state = "offline",
+  onApply,
   onRetry,
 }: {
   targetUrl: string;
   refreshIntervalMs: number;
-  onTargetChange: (targetUrl: string) => void;
-  onRefreshIntervalChange: (refreshIntervalMs: number) => void;
+  state?: "connecting" | "offline";
+  onApply: (targetUrl: string, refreshIntervalMs: number) => void;
   onRetry: () => void;
 }) {
+  const isConnecting = state === "connecting";
   return (
     <main className="target-setup-screen">
       <section className="target-setup-card">
         <div>
-          <p>Target offline</p>
-          <h1>无法连接设备</h1>
-          <span>请确认设备 IP 或 mDNS 地址，保存后面板会重新拉取 metrics、历史和 Machine Info。</span>
+          <p>{isConnecting ? "Connecting target" : "Target offline"}</p>
+          <h1>{isConnecting ? "正在连接设备" : "无法连接设备"}</h1>
+          <span>
+            {isConnecting
+              ? "如果刚切换到新的 IP 或 mDNS 地址，可以在这里直接修改，不需要等待本轮连接超时。"
+              : "请确认设备 IP 或 mDNS 地址，保存后面板会重新拉取 metrics、历史和 Machine Info。"}
+          </span>
         </div>
         <DeviceTargetControl
           refreshIntervalMs={refreshIntervalMs}
           targetUrl={targetUrl}
-          onRefreshIntervalChange={onRefreshIntervalChange}
-          onTargetChange={onTargetChange}
+          onApply={onApply}
         />
         <button className="retry-button" type="button" onClick={onRetry}>
-          Retry current target
+          {isConnecting ? "Retry now" : "Retry current target"}
         </button>
       </section>
     </main>
@@ -1408,25 +1406,23 @@ function App() {
   const { data, updatedAt, retry } = useDashboardData(targetUrl, refreshIntervalMs);
   const [activeProfileKey, setActiveProfileKey] = React.useState<string | null>(null);
 
-  async function handleTargetChange(nextTargetUrl: string) {
+  async function handleConnectionSettingsApply(nextTargetUrl: string, nextRefreshIntervalMs: number) {
+    const clamped = clampRefreshInterval(nextRefreshIntervalMs);
     setTargetUrl(nextTargetUrl);
+    setRefreshIntervalMs(clamped);
     setActiveProfileKey(null);
     writeDeviceTarget(nextTargetUrl);
-    try {
-      await saveServerConfig({ targetUrl: nextTargetUrl, refreshIntervalMs });
-    } catch {
-      // Dev-server fallback. Vite proxy still uses the local control value.
-    }
-  }
-
-  async function handleRefreshIntervalChange(nextRefreshIntervalMs: number) {
-    const clamped = clampRefreshInterval(nextRefreshIntervalMs);
-    setRefreshIntervalMs(clamped);
     writeRefreshInterval(clamped);
     try {
-      await saveServerConfig({ targetUrl, refreshIntervalMs: clamped });
+      const saved = await saveServerConfig({ targetUrl: nextTargetUrl, refreshIntervalMs: clamped });
+      const savedTarget = normalizeDeviceTarget(saved.targetUrl);
+      const savedInterval = clampRefreshInterval(saved.refreshIntervalMs);
+      setTargetUrl(savedTarget);
+      setRefreshIntervalMs(savedInterval);
+      writeDeviceTarget(savedTarget);
+      writeRefreshInterval(savedInterval);
     } catch {
-      // Dev-server fallback. Local polling still uses the configured interval.
+      // Dev-server fallback. Vite proxy still uses the local control value.
     }
   }
 
@@ -1451,7 +1447,15 @@ function App() {
   }
 
   if (!data) {
-    return <main className="loading">ingBar warming up... {targetUrl}</main>;
+    return (
+      <TargetSetupScreen
+        refreshIntervalMs={refreshIntervalMs}
+        state="connecting"
+        targetUrl={targetUrl}
+        onApply={handleConnectionSettingsApply}
+        onRetry={retry}
+      />
+    );
   }
 
   const { metrics, history, heap, machineInfo, source } = data;
@@ -1460,9 +1464,8 @@ function App() {
       <TargetSetupScreen
         refreshIntervalMs={refreshIntervalMs}
         targetUrl={targetUrl}
-        onRefreshIntervalChange={handleRefreshIntervalChange}
+        onApply={handleConnectionSettingsApply}
         onRetry={retry}
-        onTargetChange={handleTargetChange}
       />
     );
   }
@@ -1481,8 +1484,7 @@ function App() {
         targetUrl={targetUrl}
         refreshIntervalMs={refreshIntervalMs}
         updatedAt={updatedAt}
-        onRefreshIntervalChange={handleRefreshIntervalChange}
-        onTargetChange={handleTargetChange}
+        onApply={handleConnectionSettingsApply}
       />
       <ProfileSwitcher
         activeProfile={activeProfile}
