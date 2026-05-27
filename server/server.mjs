@@ -20,6 +20,10 @@ const passwordHash = process.env.IONBRIDGE_PASSWORD
   : "";
 const sessions = new Set();
 
+process.on("unhandledRejection", (error) => {
+  console.warn("[ionbridge] background task failed:", error);
+});
+
 let config = {
   targetUrl: normalizeTarget(defaultTarget),
   refreshIntervalMs: clampInterval(defaultIntervalMs),
@@ -85,8 +89,14 @@ async function saveConfig(nextConfig) {
 
 function startCollector() {
   if (collectorTimer) clearInterval(collectorTimer);
-  collectOnce();
-  collectorTimer = setInterval(collectOnce, config.refreshIntervalMs);
+  runCollector();
+  collectorTimer = setInterval(runCollector, config.refreshIntervalMs);
+}
+
+function runCollector() {
+  collectOnce().catch((error) => {
+    console.warn("[ionbridge] metrics collection failed:", error);
+  });
 }
 
 async function collectOnce() {
