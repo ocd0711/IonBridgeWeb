@@ -12,8 +12,10 @@ const endpoint = (path: string, targetUrl: string) => {
 const HISTORY_LIMIT = 360;
 const HISTORY_WINDOW_MS = 60 * 60 * 1000;
 const HISTORY_STORAGE_PREFIX = "ionbridge:port-history:v1:";
+const MACHINE_INFO_STORAGE_PREFIX = "ionbridge:machine-info:v1:";
 const REQUEST_TIMEOUT_MS = 3500;
 const METRICS_TIMEOUT_MS = 8000;
+const MACHINE_INFO_TIMEOUT_MS = 8000;
 
 export function normalizeDeviceTarget(targetUrl: string) {
   const trimmed = targetUrl.trim().replace(/\/+$/, "");
@@ -116,7 +118,7 @@ async function getJson<T>(path: string, targetUrl: string, timeoutMs = REQUEST_T
 }
 
 async function getMachineInfo(targetUrl: string): Promise<MachineInfo> {
-  const response = await fetchWithTimeout(endpoint("/", targetUrl), REQUEST_TIMEOUT_MS);
+  const response = await fetchWithTimeout(endpoint("/", targetUrl), MACHINE_INFO_TIMEOUT_MS);
   if (!response.ok) {
     throw new Error(`/ returned ${response.status}`);
   }
@@ -128,6 +130,19 @@ async function getMachineInfo(targetUrl: string): Promise<MachineInfo> {
   }
 
   return JSON.parse(match[1]) as MachineInfo;
+}
+
+async function getMachineInfoWithRetry(targetUrl: string, attempts = 3): Promise<MachineInfo> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await getMachineInfo(targetUrl);
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => window.setTimeout(resolve, 500 * (attempt + 1)));
+    }
+  }
+  throw lastError;
 }
 
 async function getJsonWithRetry<T>(path: string, targetUrl: string, timeoutMs: number, attempts = 4): Promise<T> {
@@ -166,7 +181,12 @@ export async function fetchDashboardData(targetUrl = DEFAULT_DEVICE_TARGET): Pro
     const [history, heap, machineInfo] = await Promise.all([
       getJson<PortHistory>(`/porthistoryz?limit=${HISTORY_LIMIT}`, normalizedTarget).catch(() => liveOnlyHistory(metrics)),
       getJson<HeapMetrics>("/heapz", normalizedTarget).catch(() => mockHeap),
-      getMachineInfo(normalizedTarget).catch(() => inferMachineInfo(metrics)),
+      getMachineInfoWithRetry(normalizedTarget)
+        .then((info) => {
+          writeCachedMachineInfo(normalizedTarget, info);
+          return info;
+        })
+        .catch(() => readCachedMachineInfo(normalizedTarget) ?? inferMachineInfo(metrics)),
     ]);
 
     return { metrics, history: mergeHistory(history, metrics, normalizedTarget), heap, machineInfo, source: "device" };
@@ -197,9 +217,9 @@ function inferMachineInfo(metrics: Metrics): MachineInfo {
     ble_mac: "unknown",
     wifi_mac: "unknown",
     hw_rev: "unknown",
-    device_model: "pro",
-    device_name: `CP02s-${metrics.system.app_version}`,
-    product_family: "CP02s",
+    device_model: "unknown",
+    device_name: `IonBridge-${metrics.system.app_version}`,
+    product_family: "Unknown",
     product_color: "unknown",
     esp32_version: metrics.system.app_version,
     mcu_version: "unknown",
@@ -208,6 +228,28 @@ function inferMachineInfo(metrics: Metrics): MachineInfo {
     country_code: "unknown",
     mdns_hostname: "ionbridge",
   };
+}
+
+function machineInfoStorageKey(targetUrl: string) {
+  return `${MACHINE_INFO_STORAGE_PREFIX}${encodeURIComponent(normalizeDeviceTarget(targetUrl))}`;
+}
+
+function readCachedMachineInfo(targetUrl: string): MachineInfo | null {
+  try {
+    const raw = localStorage.getItem(machineInfoStorageKey(targetUrl));
+    return raw ? JSON.parse(raw) as MachineInfo : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeCachedMachineInfo(targetUrl: string, machineInfo: MachineInfo) {
+  if (!machineInfo.psn || machineInfo.psn === "unknown") return;
+  try {
+    localStorage.setItem(machineInfoStorageKey(targetUrl), JSON.stringify(machineInfo));
+  } catch {
+    // Non-critical. The current fetch still carries the fresh machine info.
+  }
 }
 
 function mergeHistory(seed: PortHistory, metrics: Metrics, targetUrl: string): PortHistory {
