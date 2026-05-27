@@ -39,8 +39,6 @@ export type ServerSession = {
 
 export type SavedTarget = {
   targetUrl: string;
-  label: string | null;
-  enabled: boolean;
   refreshIntervalMs: number;
   deviceKey: string | null;
   lastStatus: "online" | "offline" | "unknown";
@@ -90,7 +88,7 @@ export async function saveServerConfig(config: { targetUrl: string; refreshInter
     body: JSON.stringify(config),
   });
   if (!response.ok) {
-    throw new Error("Failed to save server config");
+    throw new Error(await responseErrorMessage(response, "连接失败或设备未提供 PSN，未保存"));
   }
   return response.json() as Promise<ServerSession["config"]>;
 }
@@ -100,6 +98,27 @@ export async function deleteSavedTarget(targetUrl: string) {
   const response = await fetch(`/api/targets?${params.toString()}`, { method: "DELETE" });
   if (!response.ok) {
     throw new Error("Failed to delete target");
+  }
+  return response.json() as Promise<ServerSession["config"]>;
+}
+
+async function responseErrorMessage(response: Response, fallback: string) {
+  try {
+    const payload = await response.json() as { error?: string };
+    return payload.error ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+export async function setActiveServerTarget(targetUrl: string) {
+  const response = await fetch("/api/targets", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ targetUrl: normalizeDeviceTarget(targetUrl) }),
+  });
+  if (!response.ok) {
+    throw new Error("Failed to switch target");
   }
   return response.json() as Promise<ServerSession["config"]>;
 }

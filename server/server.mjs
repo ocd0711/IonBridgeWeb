@@ -1,6 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { createReadStream, existsSync } from "node:fs";
-import { mkdir, readFile, readdir, stat } from "node:fs/promises";
+import { mkdir, stat } from "node:fs/promises";
 import { createServer } from "node:http";
 import { extname, join, normalize } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -9,9 +9,7 @@ import { fileURLToPath } from "node:url";
 const rootDir = fileURLToPath(new URL("..", import.meta.url));
 const distDir = join(rootDir, "dist");
 const dataDir = process.env.IONBRIDGE_DATA_DIR ?? "/data";
-const configPath = join(dataDir, "config.json");
 const databasePath = join(dataDir, "ionbridge.db");
-const historyDir = join(dataDir, "history");
 const defaultIntervalMs = 30000;
 const retentionDays = Math.max(1, Math.round(Number(process.env.IONBRIDGE_RETENTION_DAYS ?? 30)));
 const passwordHash = process.env.IONBRIDGE_PASSWORD
@@ -34,8 +32,6 @@ let lastPruneAt = 0;
 
 await mkdir(dataDir, { recursive: true });
 const db = openDatabase(databasePath);
-await migrateJsonlHistory();
-await migrateLegacyConfig();
 config = await loadConfig();
 pruneHistory(Date.now(), true);
 startCollectors();
@@ -61,7 +57,8 @@ const server = createServer(async (req, res) => {
     }
 
     if (url.pathname === "/api/targets") {
-      if (req.method === "GET") return sendJson(res, { targets: listTargets(), activeTargetUrl: getSetting("active_target_url", "") });
+      if (req.method === "GET") return sendJson(res, { targets: listTargets(), activeTargetUrl: config.targetUrl });
+      if (req.method === "POST") return handleSetActiveTarget(req, res);
       if (req.method === "DELETE") return handleDeleteTarget(url, res);
     }
 
@@ -78,84 +75,20 @@ server.listen(Number(process.env.PORT ?? 18318), "0.0.0.0");
 
 async function loadConfig() {
   const targets = listTargets();
-  const active = getSetting("active_target_url", targets[0]?.targetUrl ?? "");
-  const activeTarget = targets.some((target) => target.targetUrl === active) ? active : targets[0]?.targetUrl ?? "";
-  const activeEntry = targets.find((target) => target.targetUrl === activeTarget);
-  if (activeTarget !== active) setSetting("active_target_url", activeTarget);
+  const active = getSetting("active_device_key", targets[0]?.deviceKey ?? "");
+  const activeEntry = targets.find((target) => target.deviceKey === active) ?? targets[0] ?? null;
+  if ((activeEntry?.deviceKey ?? "") !== active) setSetting("active_device_key", activeEntry?.deviceKey ?? "");
   return {
-    targetUrl: activeTarget,
+    targetUrl: activeEntry?.targetUrl ?? "",
     refreshIntervalMs: activeEntry?.refreshIntervalMs ?? clampInterval(Number(getSetting("refresh_interval_ms", defaultIntervalMs))),
     targets,
   };
 }
 
-async function migrateLegacyConfig() {
-  if (!existsSync(configPath)) return;
-  const marker = "legacy-config-v1";
-  if (db.prepare("SELECT key FROM migrations WHERE key = ?").get(marker)) return;
-  try {
-    const raw = parseConfig(await readFile(configPath, "utf8"));
-    const targetUrl = normalizeTarget(raw?.targetUrl);
-    const refreshIntervalMs = clampInterval(Number(raw?.refreshIntervalMs ?? defaultIntervalMs));
-    if (targetUrl) {
-      upsertTarget({ targetUrl, refreshIntervalMs, active: true });
-      setSetting("refresh_interval_ms", refreshIntervalMs);
-      setSetting("active_target_url", targetUrl);
-    }
-  } catch {
-    // A broken legacy config should not prevent the SQLite-backed service from starting.
-  }
-  db.prepare("INSERT INTO migrations (key, applied_at) VALUES (?, ?)").run(marker, Date.now());
-}
-
-function parseConfig(raw) {
-  try {
-    return JSON.parse(raw);
-  } catch {
-    const recovered = firstJsonObject(raw);
-    if (!recovered) throw new Error("config.json is not valid JSON");
-    return JSON.parse(recovered);
-  }
-}
-
-function firstJsonObject(raw) {
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  let start = -1;
-  for (let index = 0; index < raw.length; index += 1) {
-    const char = raw[index];
-    if (start === -1) {
-      if (char === "{") {
-        start = index;
-        depth = 1;
-      }
-      continue;
-    }
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (char === "\\") {
-      escaped = inString;
-      continue;
-    }
-    if (char === "\"") {
-      inString = !inString;
-      continue;
-    }
-    if (inString) continue;
-    if (char === "{") depth += 1;
-    if (char === "}") depth -= 1;
-    if (depth === 0) return raw.slice(start, index + 1);
-  }
-  return null;
-}
-
 function startCollectors() {
   for (const timer of collectorTimers.values()) clearInterval(timer);
   collectorTimers.clear();
-  for (const target of listTargets().filter((item) => item.enabled)) {
+  for (const target of listTargets()) {
     runCollector(target.targetUrl);
     collectorTimers.set(target.targetUrl, setInterval(() => runCollector(target.targetUrl), target.refreshIntervalMs));
   }
@@ -163,7 +96,7 @@ function startCollectors() {
 
 function runCollector(targetUrl) {
   collectOnce(targetUrl).catch(async (error) => {
-    markTargetStatus(targetUrl, "offline", error instanceof Error ? error.message : "collection failed");
+    markTargetStatusByTarget(targetUrl, "offline", error instanceof Error ? error.message : "collection failed");
     config = await loadConfig();
   });
 }
@@ -173,12 +106,11 @@ async function collectOnce(targetUrl) {
   if (collectingTargets.has(normalizedTarget)) return;
   collectingTargets.add(normalizedTarget);
   try {
+    const machineInfo = await fetchMachineInfo(normalizedTarget);
+    const deviceKey = requireDeviceKey(machineInfo);
     const metrics = await fetchJson(new URL("/metrics.json", normalizedTarget).toString(), 8000);
     const ts = Date.now();
-    const machineInfo = await fetchMachineInfo(normalizedTarget).catch(() => null);
-    const deviceKey = resolveDeviceKey(normalizedTarget, machineInfo);
-    if (deviceKey) upsertDevice({ deviceKey, machineInfo, target: normalizedTarget, ts });
-    markTargetStatus(normalizedTarget, "online", null, { deviceKey, seenAt: ts });
+    markTargetStatus(deviceKey, "online", null, { seenAt: ts });
     insertSamples(metrics.ports.map((port) => ({
       device_key: deviceKey,
       ts,
@@ -193,7 +125,7 @@ async function collectOnce(targetUrl) {
     })));
     pruneHistory(ts);
   } catch {
-    markTargetStatus(normalizedTarget, "offline", "target unreachable");
+    markTargetStatusByTarget(normalizedTarget, "offline", "target unreachable");
   } finally {
     config = await loadConfig();
     collectingTargets.delete(normalizedTarget);
@@ -202,10 +134,13 @@ async function collectOnce(targetUrl) {
 
 function openDatabase(path) {
   const database = new DatabaseSync(path);
+  database.exec("PRAGMA foreign_keys = ON");
   database.exec(`
+    DROP TABLE IF EXISTS devices;
+    DROP TABLE IF EXISTS migrations;
     CREATE TABLE IF NOT EXISTS samples (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      device_key TEXT,
+      device_key TEXT NOT NULL,
       target TEXT NOT NULL,
       ts INTEGER NOT NULL,
       port INTEGER NOT NULL,
@@ -216,32 +151,47 @@ function openDatabase(path) {
       attached INTEGER,
       protocol TEXT
     );
-    CREATE INDEX IF NOT EXISTS idx_samples_target_ts ON samples(target, ts);
-    CREATE INDEX IF NOT EXISTS idx_samples_target_port_ts ON samples(target, port, ts);
+  `);
+  if (!tableHasRequiredColumns(database, "samples", ["device_key", "target", "ts", "port"]) || !columnIsNotNull(database, "samples", "device_key")) {
+    database.exec(`
+      DROP TABLE IF EXISTS samples_v2;
+      CREATE TABLE samples_v2 (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        device_key TEXT NOT NULL,
+        target TEXT NOT NULL,
+        ts INTEGER NOT NULL,
+        port INTEGER NOT NULL,
+        voltage INTEGER,
+        current INTEGER,
+        temperature_c REAL,
+        power_w REAL,
+        attached INTEGER,
+        protocol TEXT
+      );
+      INSERT INTO samples_v2 (
+        device_key, target, ts, port, voltage, current, temperature_c, power_w, attached, protocol
+      )
+      SELECT device_key, target, ts, port, voltage, current, temperature_c, power_w, attached, protocol
+      FROM samples
+      WHERE device_key IS NOT NULL
+        AND device_key != ''
+        AND device_key NOT LIKE 'http://%'
+        AND device_key NOT LIKE 'https://%';
+      DROP TABLE samples;
+      ALTER TABLE samples_v2 RENAME TO samples;
+    `);
+  }
+  database.exec(`
     CREATE INDEX IF NOT EXISTS idx_samples_device_ts ON samples(device_key, ts);
     CREATE INDEX IF NOT EXISTS idx_samples_device_port_ts ON samples(device_key, port, ts);
-    CREATE TABLE IF NOT EXISTS devices (
-      device_key TEXT PRIMARY KEY,
-      psn TEXT,
-      device_name TEXT,
-      mdns_hostname TEXT,
-      last_target TEXT NOT NULL,
-      last_seen INTEGER NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS migrations (
-      key TEXT PRIMARY KEY,
-      applied_at INTEGER NOT NULL
-    );
     CREATE TABLE IF NOT EXISTS settings (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS targets (
-      target_url TEXT PRIMARY KEY,
-      label TEXT,
-      enabled INTEGER NOT NULL DEFAULT 1,
+      device_key TEXT PRIMARY KEY,
+      target_url TEXT NOT NULL UNIQUE,
       refresh_interval_ms INTEGER NOT NULL DEFAULT 30000,
-      device_key TEXT,
       last_status TEXT NOT NULL DEFAULT 'unknown',
       last_error TEXT,
       last_seen INTEGER,
@@ -250,27 +200,76 @@ function openDatabase(path) {
       updated_at INTEGER NOT NULL
     );
   `);
-  ensureColumn(database, "samples", "device_key", "TEXT");
-  ensureColumn(database, "targets", "label", "TEXT");
-  ensureColumn(database, "targets", "enabled", "INTEGER NOT NULL DEFAULT 1");
-  ensureColumn(database, "targets", "refresh_interval_ms", "INTEGER NOT NULL DEFAULT 30000");
-  ensureColumn(database, "targets", "device_key", "TEXT");
-  ensureColumn(database, "targets", "last_status", "TEXT NOT NULL DEFAULT 'unknown'");
-  ensureColumn(database, "targets", "last_error", "TEXT");
-  ensureColumn(database, "targets", "last_seen", "INTEGER");
-  ensureColumn(database, "targets", "last_sample_at", "INTEGER");
-  ensureColumn(database, "targets", "created_at", "INTEGER NOT NULL DEFAULT 0");
-  ensureColumn(database, "targets", "updated_at", "INTEGER NOT NULL DEFAULT 0");
-  database.prepare("UPDATE samples SET device_key = NULL WHERE device_key = '' OR device_key LIKE 'http://%' OR device_key LIKE 'https://%'").run();
-  database.prepare("DELETE FROM devices WHERE device_key LIKE 'http://%' OR device_key LIKE 'https://%'").run();
+  if (!targetsSchemaIsCurrent(database)) {
+    database.exec(`
+      DROP TABLE IF EXISTS targets_v2;
+      CREATE TABLE targets_v2 (
+        device_key TEXT PRIMARY KEY,
+        target_url TEXT NOT NULL UNIQUE,
+        refresh_interval_ms INTEGER NOT NULL DEFAULT 30000,
+        last_status TEXT NOT NULL DEFAULT 'unknown',
+        last_error TEXT,
+        last_seen INTEGER,
+        last_sample_at INTEGER,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      INSERT OR REPLACE INTO targets_v2 (
+        device_key, target_url, refresh_interval_ms, last_status, last_error,
+        last_seen, last_sample_at, created_at, updated_at
+      )
+      SELECT device_key, target_url, refresh_interval_ms,
+        COALESCE(last_status, 'unknown'), last_error, last_seen, last_sample_at,
+        COALESCE(NULLIF(created_at, 0), strftime('%s','now') * 1000),
+        COALESCE(NULLIF(updated_at, 0), strftime('%s','now') * 1000)
+      FROM targets
+      WHERE device_key IS NOT NULL
+        AND device_key != ''
+        AND device_key NOT LIKE 'http://%'
+        AND device_key NOT LIKE 'https://%';
+      DROP TABLE targets;
+      ALTER TABLE targets_v2 RENAME TO targets;
+    `);
+  }
+  database.exec(`
+    CREATE INDEX IF NOT EXISTS idx_targets_target_url ON targets(target_url);
+  `);
+  database.prepare("DELETE FROM settings WHERE key = ?").run("active_target_url");
   return database;
 }
 
-function ensureColumn(database, table, column, type) {
-  const columns = database.prepare(`PRAGMA table_info(${table})`).all();
-  if (!columns.some((info) => info.name === column)) {
-    database.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
-  }
+function tableExists(database, table) {
+  return Boolean(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(table));
+}
+
+function tableColumns(database, table) {
+  if (!tableExists(database, table)) return [];
+  return database.prepare(`PRAGMA table_info(${table})`).all();
+}
+
+function tableHasRequiredColumns(database, table, columns) {
+  const names = new Set(tableColumns(database, table).map((column) => column.name));
+  return columns.every((column) => names.has(column));
+}
+
+function columnIsNotNull(database, table, columnName) {
+  const column = tableColumns(database, table).find((info) => info.name === columnName);
+  return Boolean(column?.notnull);
+}
+
+function targetsSchemaIsCurrent(database) {
+  const columns = tableColumns(database, "targets");
+  const names = new Set(columns.map((column) => column.name));
+  const deviceKey = columns.find((column) => column.name === "device_key");
+  return (
+    names.has("device_key") &&
+    names.has("target_url") &&
+    names.has("refresh_interval_ms") &&
+    names.has("last_status") &&
+    !names.has("label") &&
+    !names.has("enabled") &&
+    Boolean(deviceKey?.pk)
+  );
 }
 
 function getSetting(key, fallback) {
@@ -286,55 +285,84 @@ function setSetting(key, value) {
 
 function listTargets() {
   return db.prepare(`
-    SELECT target_url targetUrl, label, enabled, refresh_interval_ms refreshIntervalMs,
+    SELECT target_url targetUrl, refresh_interval_ms refreshIntervalMs,
       device_key deviceKey, last_status lastStatus, last_error lastError,
       last_seen lastSeen, last_sample_at lastSampleAt
     FROM targets
     ORDER BY updated_at DESC, created_at DESC
   `).all().map((target) => ({
     ...target,
-    enabled: Boolean(target.enabled),
     refreshIntervalMs: clampInterval(Number(target.refreshIntervalMs)),
   }));
 }
 
-function upsertTarget({ targetUrl, refreshIntervalMs, active }) {
+function upsertVerifiedTarget({ deviceKey, targetUrl, refreshIntervalMs, active, status = "online", error = null }) {
   const normalizedTarget = normalizeTarget(targetUrl);
   if (!normalizedTarget) throw new Error("targetUrl is required");
+  const normalizedDeviceKey = normalizeDeviceKey(deviceKey);
+  if (!normalizedDeviceKey) throw new Error("PSN is required");
   const now = Date.now();
+  db.prepare("DELETE FROM targets WHERE target_url = ? AND device_key != ?").run(normalizedTarget, normalizedDeviceKey);
   db.prepare(`
-    INSERT INTO targets (target_url, enabled, refresh_interval_ms, created_at, updated_at)
-    VALUES (?, 1, ?, ?, ?)
-    ON CONFLICT(target_url) DO UPDATE SET
-      enabled = 1,
+    INSERT INTO targets (
+      device_key, target_url, refresh_interval_ms, last_status, last_error,
+      last_seen, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(device_key) DO UPDATE SET
+      target_url = excluded.target_url,
       refresh_interval_ms = excluded.refresh_interval_ms,
+      last_status = excluded.last_status,
+      last_error = excluded.last_error,
+      last_seen = excluded.last_seen,
       updated_at = excluded.updated_at
-  `).run(normalizedTarget, clampInterval(Number(refreshIntervalMs ?? defaultIntervalMs)), now, now);
-  if (active) setSetting("active_target_url", normalizedTarget);
+  `).run(
+    normalizedDeviceKey,
+    normalizedTarget,
+    clampInterval(Number(refreshIntervalMs ?? defaultIntervalMs)),
+    status,
+    error,
+    status === "online" ? now : null,
+    now,
+    now,
+  );
+  if (active) setSetting("active_device_key", normalizedDeviceKey);
 }
 
-function markTargetStatus(targetUrl, status, error, details = {}) {
+function markTargetStatus(deviceKey, status, error, details = {}) {
+  const normalizedDeviceKey = normalizeDeviceKey(deviceKey);
+  if (!normalizedDeviceKey) return;
+  const now = Date.now();
+  db.prepare(`
+    UPDATE targets
+    SET last_status = ?, last_error = ?,
+      last_seen = COALESCE(?, last_seen), last_sample_at = COALESCE(?, last_sample_at),
+      updated_at = ?
+    WHERE device_key = ?
+  `).run(
+    status,
+    error,
+    details.seenAt ?? null,
+    status === "online" ? details.seenAt ?? now : null,
+    now,
+    normalizedDeviceKey,
+  );
+}
+
+function markTargetStatusByTarget(targetUrl, status, error) {
   const normalizedTarget = normalizeTarget(targetUrl);
   const now = Date.now();
   db.prepare(`
     UPDATE targets
-    SET last_status = ?, last_error = ?, device_key = COALESCE(?, device_key),
-      last_seen = COALESCE(?, last_seen), last_sample_at = COALESCE(?, last_sample_at),
-      updated_at = ?
+    SET last_status = ?, last_error = ?, updated_at = ?
     WHERE target_url = ?
-  `).run(
-    status,
-    error,
-    details.deviceKey ?? null,
-    details.seenAt ?? null,
-    status === "online" ? details.seenAt ?? now : null,
-    now,
-    normalizedTarget,
-  );
+  `).run(status, error, now, normalizedTarget);
 }
 
 function insertSamples(rows) {
   if (rows.length === 0) return;
+  if (rows.some((row) => !normalizeDeviceKey(row.device_key))) {
+    throw new Error("samples require a valid PSN device_key");
+  }
   const insert = db.prepare(`
     INSERT INTO samples (
       device_key, target, ts, port, voltage, current, temperature_c, power_w, attached, protocol
@@ -372,39 +400,16 @@ async function fetchMachineInfo(target) {
   return JSON.parse(match[1]);
 }
 
-function resolveDeviceKey(target, machineInfo) {
-  return normalizeDeviceKey(machineInfo?.psn);
-}
-
 function normalizeDeviceKey(value) {
   const key = String(value ?? "").trim();
   if (!key || key.toLowerCase() === "unknown") return null;
   return key;
 }
 
-function upsertDevice({ deviceKey, machineInfo, target, ts }) {
-  db.prepare(`
-    INSERT INTO devices (device_key, psn, device_name, mdns_hostname, last_target, last_seen)
-    VALUES (?, ?, ?, ?, ?, ?)
-    ON CONFLICT(device_key) DO UPDATE SET
-      psn = excluded.psn,
-      device_name = excluded.device_name,
-      mdns_hostname = excluded.mdns_hostname,
-      last_target = excluded.last_target,
-      last_seen = excluded.last_seen
-  `).run(
-    deviceKey,
-    normalizeDeviceKey(machineInfo?.psn),
-    machineInfo?.device_name ?? null,
-    machineInfo?.mdns_hostname ?? null,
-    normalizeTarget(target),
-    ts,
-  );
-  db.prepare(`
-    UPDATE samples
-    SET device_key = ?
-    WHERE target = ? AND (device_key IS NULL OR device_key = '')
-  `).run(deviceKey, normalizeTarget(target));
+function requireDeviceKey(machineInfo) {
+  const deviceKey = normalizeDeviceKey(machineInfo?.psn);
+  if (!deviceKey) throw new Error("target did not expose a valid PSN");
+  return deviceKey;
 }
 
 function pruneHistory(now, force = false) {
@@ -412,41 +417,6 @@ function pruneHistory(now, force = false) {
   lastPruneAt = now;
   const cutoff = now - retentionDays * 24 * 60 * 60 * 1000;
   db.prepare("DELETE FROM samples WHERE ts < ?").run(cutoff);
-}
-
-async function migrateJsonlHistory() {
-  if (!existsSync(historyDir)) return;
-  const marker = "jsonl-history-v1";
-  const migrated = db.prepare("SELECT key FROM migrations WHERE key = ?").get(marker);
-  if (migrated) return;
-
-  const rows = [];
-  for (const entry of await readdir(historyDir)) {
-    if (!entry.endsWith(".jsonl")) continue;
-    const raw = await readFile(join(historyDir, entry), "utf8").catch(() => "");
-    for (const line of raw.split("\n")) {
-      if (!line) continue;
-      try {
-        const parsed = JSON.parse(line);
-        rows.push({
-          device_key: normalizeDeviceKey(parsed.psn),
-          ts: parsed.ts,
-          target: parsed.target,
-          port: parsed.port,
-          voltage: parsed.voltage,
-          current: parsed.current,
-          temperature_c: parsed.temperature_c,
-          power_w: parsed.power_w,
-          attached: parsed.attached ? 1 : 0,
-          protocol: parsed.protocol,
-        });
-      } catch {
-        // Ignore broken legacy rows.
-      }
-    }
-  }
-  insertSamples(rows.filter((row) => Number.isFinite(row.ts) && row.target && Number.isFinite(row.port)));
-  db.prepare("INSERT INTO migrations (key, applied_at) VALUES (?, ?)").run(marker, Date.now());
 }
 
 async function handleHistory(url, res) {
@@ -477,39 +447,23 @@ function resolveHistoryKey(target) {
     LIMIT 1
   `).get(normalizedTarget);
   if (savedTarget?.device_key) return { deviceKey: savedTarget.device_key, target: normalizedTarget };
-
-  const device = db.prepare(`
-    SELECT device_key FROM devices
-    WHERE last_target = ?
-    ORDER BY last_seen DESC
-    LIMIT 1
-  `).get(normalizedTarget);
-  if (device?.device_key) return { deviceKey: device.device_key, target: normalizedTarget };
-
-  const sample = db.prepare(`
-    SELECT device_key FROM samples
-    WHERE target = ? AND device_key IS NOT NULL AND device_key != ''
-    ORDER BY ts DESC
-    LIMIT 1
-  `).get(normalizedTarget);
-  return { deviceKey: sample?.device_key ?? null, target: normalizedTarget };
+  return { deviceKey: null, target: normalizedTarget };
 }
 
 function queryHistory({ deviceKey, target, start, end, portFilter }) {
-  const identityWhere = deviceKey ? "(device_key = ? OR target = ?)" : "target = ?";
+  if (!deviceKey) return [];
   const sql = portFilter
     ? `SELECT ts, target, port, voltage, current, temperature_c, power_w, attached, protocol
        FROM samples
-       WHERE ${identityWhere} AND port = ? AND ts >= ? AND ts <= ?
+       WHERE device_key = ? AND port = ? AND ts >= ? AND ts <= ?
        ORDER BY ts ASC`
     : `SELECT ts, target, port, voltage, current, temperature_c, power_w, attached, protocol
        FROM samples
-       WHERE ${identityWhere} AND ts >= ? AND ts <= ?
+       WHERE device_key = ? AND ts >= ? AND ts <= ?
        ORDER BY ts ASC`;
-  const identityArgs = deviceKey ? [deviceKey, target] : [target];
   const rows = portFilter
-    ? db.prepare(sql).all(...identityArgs, Number(portFilter), start, end)
-    : db.prepare(sql).all(...identityArgs, start, end);
+    ? db.prepare(sql).all(deviceKey, Number(portFilter), start, end)
+    : db.prepare(sql).all(deviceKey, start, end);
   return rows.map((row) => ({ ...row, attached: Boolean(row.attached) }));
 }
 
@@ -518,10 +472,33 @@ async function handleConfig(req, res) {
   const targetUrl = normalizeTarget(body.targetUrl ?? config.targetUrl);
   if (!targetUrl) return sendJson(res, { error: "targetUrl is required" }, 400);
   const refreshIntervalMs = clampInterval(Number(body.refreshIntervalMs ?? config.refreshIntervalMs));
-  upsertTarget({ targetUrl, refreshIntervalMs, active: true });
+  let machineInfo;
+  let deviceKey;
+  try {
+    machineInfo = await fetchMachineInfo(targetUrl);
+    deviceKey = requireDeviceKey(machineInfo);
+  } catch (error) {
+    return sendJson(res, {
+      error: error instanceof Error && error.message.includes("PSN")
+        ? error.message
+        : "target connection failed; device was not saved",
+    }, 422);
+  }
+  upsertVerifiedTarget({ deviceKey, targetUrl, refreshIntervalMs, active: true });
   setSetting("refresh_interval_ms", refreshIntervalMs);
   config = await loadConfig();
   startCollectors();
+  sendJson(res, config);
+}
+
+async function handleSetActiveTarget(req, res) {
+  const body = await readJson(req);
+  const targetUrl = normalizeTarget(body.targetUrl);
+  if (!targetUrl) return sendJson(res, { error: "targetUrl is required" }, 400);
+  const target = db.prepare("SELECT device_key FROM targets WHERE target_url = ?").get(targetUrl);
+  if (!target?.device_key) return sendJson(res, { error: "target is not saved" }, 404);
+  setSetting("active_device_key", target.device_key);
+  config = await loadConfig();
   sendJson(res, config);
 }
 
@@ -534,18 +511,15 @@ async function handleDeleteTarget(url, res) {
     clearInterval(collectorTimers.get(targetUrl));
     collectorTimers.delete(targetUrl);
   }
-  db.prepare("DELETE FROM targets WHERE target_url = ?").run(targetUrl);
-  db.prepare("DELETE FROM samples WHERE target = ?").run(targetUrl);
   if (deviceKey) {
-    const remainingSamples = db.prepare("SELECT 1 FROM samples WHERE device_key = ? LIMIT 1").get(deviceKey);
-    const remainingTargets = db.prepare("SELECT 1 FROM targets WHERE device_key = ? LIMIT 1").get(deviceKey);
-    if (!remainingSamples && !remainingTargets) {
-      db.prepare("DELETE FROM devices WHERE device_key = ?").run(deviceKey);
-    }
+    db.prepare("DELETE FROM targets WHERE device_key = ?").run(deviceKey);
+    db.prepare("DELETE FROM samples WHERE device_key = ?").run(deviceKey);
+  } else {
+    db.prepare("DELETE FROM targets WHERE target_url = ?").run(targetUrl);
   }
-  if (getSetting("active_target_url", "") === targetUrl) {
-    const nextTarget = listTargets()[0]?.targetUrl ?? "";
-    setSetting("active_target_url", nextTarget);
+  if (getSetting("active_device_key", "") === deviceKey) {
+    const nextTarget = listTargets()[0]?.deviceKey ?? "";
+    setSetting("active_device_key", nextTarget);
   }
   config = await loadConfig();
   startCollectors();

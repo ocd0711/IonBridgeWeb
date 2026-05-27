@@ -244,13 +244,30 @@ h1 {
 
 .target-control {
   display: inline-flex;
+  position: relative;
   min-height: 40px;
   align-items: center;
-  overflow: hidden;
+  overflow: visible;
   border: 1px solid var(--hairline);
   border-radius: 8px;
   background: rgba(255, 253, 250, 0.75);
   box-shadow: 0 1px 0 rgba(255, 255, 255, 0.8) inset;
+}
+
+.target-error {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 6px);
+  right: 0;
+  max-width: min(420px, 100%);
+  border: 1px solid rgba(156, 47, 16, 0.28);
+  border-radius: 8px;
+  background: rgba(255, 246, 239, 0.96);
+  padding: 7px 9px;
+  color: #9c2f10;
+  font-size: 12px;
+  font-weight: 900;
+  box-shadow: var(--shadow);
 }
 
 .target-control input {
@@ -2169,6 +2186,12 @@ h1 {
   .saved-target-trigger b {
     background: rgba(255, 255, 255, 0.08);
     color: #ffd4a8;
+  }
+
+  .target-error {
+    border-color: rgba(255, 118, 27, 0.32);
+    background: rgba(46, 27, 19, 0.96);
+    color: #ffb07a;
   }
 
   .recharts-cartesian-grid line {

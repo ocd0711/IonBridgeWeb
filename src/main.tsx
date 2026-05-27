@@ -30,6 +30,7 @@ import {
   login,
   normalizeDeviceTarget,
   saveServerConfig,
+  setActiveServerTarget,
   deleteSavedTarget,
   type SavedTarget,
 } from "./api";
@@ -155,6 +156,7 @@ function Header({
   refreshIntervalMs,
   savedTargets,
   onApply,
+  onSelectSavedTarget,
   onDeleteTarget,
 }: {
   metrics: Metrics;
@@ -165,6 +167,7 @@ function Header({
   refreshIntervalMs: number;
   savedTargets: SavedTarget[];
   onApply: (targetUrl: string, refreshIntervalMs: number) => void | Promise<void>;
+  onSelectSavedTarget: (target: SavedTarget) => void | Promise<void>;
   onDeleteTarget: (targetUrl: string) => void | Promise<void>;
 }) {
   const totalPower = metrics.ports.reduce((sum, port) => sum + watts(port), 0);
@@ -206,7 +209,7 @@ function Header({
         <SavedTargetsMenu
           activeTargetUrl={targetUrl}
           targets={savedTargets}
-          onSelect={(target) => onApply(target.targetUrl, target.refreshIntervalMs)}
+          onSelect={onSelectSavedTarget}
           onDelete={onDeleteTarget}
         />
         <DeviceTargetControl
@@ -236,7 +239,7 @@ function SavedTargetsMenu({
   if (targets.length === 0) return null;
   const normalizedActive = normalizeDeviceTarget(activeTargetUrl);
   const activeTarget = targets.find((target) => target.targetUrl === normalizedActive) ?? targets[0];
-  const activeName = activeTarget.deviceKey ?? activeTarget.label ?? activeTarget.targetUrl.replace(/^https?:\/\//, "");
+  const activeName = activeTarget.deviceKey ?? activeTarget.targetUrl.replace(/^https?:\/\//, "");
 
   return (
     <div className="saved-targets">
@@ -257,7 +260,7 @@ function SavedTargetsMenu({
         <div className="saved-target-menu" aria-label="已保存设备地址">
           {targets.map((target) => {
             const isActive = normalizedActive === target.targetUrl;
-            const name = target.deviceKey ?? target.label ?? target.targetUrl.replace(/^https?:\/\//, "");
+            const name = target.deviceKey ?? target.targetUrl.replace(/^https?:\/\//, "");
             return (
               <div className={`saved-target ${isActive ? "active" : ""}`} key={target.targetUrl}>
                 <button
@@ -315,6 +318,7 @@ function DeviceTargetControl({
   const [draft, setDraft] = React.useState(mode === "add" ? "" : targetUrl);
   const [intervalDraft, setIntervalDraft] = React.useState(String(refreshIntervalMs / 1000));
   const [isApplying, setIsApplying] = React.useState(false);
+  const [error, setError] = React.useState("");
 
   React.useEffect(() => {
     if (mode === "edit") setDraft(targetUrl);
@@ -332,9 +336,12 @@ function DeviceTargetControl({
         if (isApplying) return;
         if (!draft.trim()) return;
         setIsApplying(true);
+        setError("");
         try {
           await onApply(normalizeDeviceTarget(draft), clampRefreshInterval(Number(intervalDraft) * 1000));
           if (mode === "add") setDraft("");
+        } catch (requestError) {
+          setError(requestError instanceof Error ? requestError.message : "连接失败，未保存设备");
         } finally {
           setIsApplying(false);
         }
@@ -360,6 +367,7 @@ function DeviceTargetControl({
       <button disabled={isApplying} type="submit">
         {isApplying ? "正在连接..." : mode === "add" ? "添加并连接" : "保存并连接"}
       </button>
+      {error ? <strong className="target-error">{error}</strong> : null}
     </form>
   );
 }
@@ -405,6 +413,7 @@ function TargetSetupScreen({
   savedTargets = [],
   state = "offline",
   onApply,
+  onSelectSavedTarget,
   onDeleteTarget,
   onRetry,
 }: {
@@ -413,6 +422,7 @@ function TargetSetupScreen({
   savedTargets?: SavedTarget[];
   state?: "connecting" | "offline";
   onApply: (targetUrl: string, refreshIntervalMs: number) => void | Promise<void>;
+  onSelectSavedTarget: (target: SavedTarget) => void | Promise<void>;
   onDeleteTarget?: (targetUrl: string) => void | Promise<void>;
   onRetry: () => void;
 }) {
@@ -433,7 +443,7 @@ function TargetSetupScreen({
         <SavedTargetsMenu
           activeTargetUrl={targetUrl}
           targets={savedTargets}
-          onSelect={(target) => onApply(target.targetUrl, target.refreshIntervalMs)}
+          onSelect={onSelectSavedTarget}
           onDelete={onDeleteTarget ?? (() => undefined)}
         />
         <DeviceTargetControl
@@ -444,7 +454,7 @@ function TargetSetupScreen({
         />
         <button
           className="retry-button"
-          disabled={isRetrying}
+          disabled={isRetrying || isConnecting}
           type="button"
           onClick={() => {
             setIsRetrying(true);
@@ -452,7 +462,7 @@ function TargetSetupScreen({
             window.setTimeout(() => setIsRetrying(false), 900);
           }}
         >
-          {isRetrying ? "正在重试..." : isConnecting ? "重试已保存地址" : "重试当前地址"}
+          {isConnecting ? "正在连接..." : isRetrying ? "正在重试..." : "重试当前地址"}
         </button>
       </section>
     </main>
@@ -1571,23 +1581,28 @@ function App() {
 
   async function handleConnectionSettingsApply(nextTargetUrl: string, nextRefreshIntervalMs: number) {
     const clamped = clampRefreshInterval(nextRefreshIntervalMs);
-    setTargetUrl(nextTargetUrl);
-    setRefreshIntervalMs(clamped);
+    const saved = await saveServerConfig({ targetUrl: nextTargetUrl, refreshIntervalMs: clamped });
+    const savedTarget = normalizeDeviceTarget(saved.targetUrl);
+    const savedInterval = clampRefreshInterval(saved.refreshIntervalMs);
     setActiveProfileKey(null);
-    writeDeviceTarget(nextTargetUrl);
-    writeRefreshInterval(clamped);
-    try {
-      const saved = await saveServerConfig({ targetUrl: nextTargetUrl, refreshIntervalMs: clamped });
-      const savedTarget = normalizeDeviceTarget(saved.targetUrl);
-      const savedInterval = clampRefreshInterval(saved.refreshIntervalMs);
-      setSavedTargets(saved.targets);
-      setTargetUrl(savedTarget);
-      setRefreshIntervalMs(savedInterval);
-      writeDeviceTarget(savedTarget);
-      writeRefreshInterval(savedInterval);
-    } catch {
-      // Dev-server fallback. Vite proxy still uses the local control value.
-    }
+    setSavedTargets(saved.targets);
+    setTargetUrl(savedTarget);
+    setRefreshIntervalMs(savedInterval);
+    writeDeviceTarget(savedTarget);
+    writeRefreshInterval(savedInterval);
+    retry();
+  }
+
+  async function handleSavedTargetSelect(target: SavedTarget) {
+    const saved = await setActiveServerTarget(target.targetUrl);
+    const savedTarget = normalizeDeviceTarget(saved.targetUrl);
+    const savedInterval = clampRefreshInterval(saved.refreshIntervalMs);
+    setActiveProfileKey(null);
+    setSavedTargets(saved.targets);
+    setTargetUrl(savedTarget);
+    setRefreshIntervalMs(savedInterval);
+    writeDeviceTarget(savedTarget);
+    writeRefreshInterval(savedInterval);
     retry();
   }
 
@@ -1646,6 +1661,7 @@ function App() {
         targetUrl={targetUrl}
         savedTargets={savedTargets}
         onApply={handleConnectionSettingsApply}
+        onSelectSavedTarget={handleSavedTargetSelect}
         onDeleteTarget={handleDeleteSavedTarget}
         onRetry={retry}
       />
@@ -1660,6 +1676,7 @@ function App() {
         targetUrl={targetUrl}
         savedTargets={savedTargets}
         onApply={handleConnectionSettingsApply}
+        onSelectSavedTarget={handleSavedTargetSelect}
         onDeleteTarget={handleDeleteSavedTarget}
         onRetry={retry}
       />
@@ -1682,6 +1699,7 @@ function App() {
         savedTargets={savedTargets}
         updatedAt={updatedAt}
         onApply={handleConnectionSettingsApply}
+        onSelectSavedTarget={handleSavedTargetSelect}
         onDeleteTarget={handleDeleteSavedTarget}
       />
       <ProfileSwitcher
