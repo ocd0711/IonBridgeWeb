@@ -231,43 +231,71 @@ function SavedTargetsMenu({
   onDelete: (targetUrl: string) => void | Promise<void>;
 }) {
   const [isDeleting, setIsDeleting] = React.useState("");
+  const [isOpen, setIsOpen] = React.useState(false);
   if (targets.length === 0) return null;
+  const normalizedActive = normalizeDeviceTarget(activeTargetUrl);
+  const activeTarget = targets.find((target) => target.targetUrl === normalizedActive) ?? targets[0];
+  const activeName = activeTarget.deviceKey ?? activeTarget.label ?? activeTarget.targetUrl.replace(/^https?:\/\//, "");
 
   return (
-    <div className="saved-targets" aria-label="已保存设备地址">
-      {targets.map((target) => {
-        const isActive = normalizeDeviceTarget(activeTargetUrl) === target.targetUrl;
-        return (
-          <div className={`saved-target ${isActive ? "active" : ""}`} key={target.targetUrl}>
-            <button
-              className="saved-target-main"
-              type="button"
-              onClick={() => onSelect(target)}
-              title={target.lastError ?? target.targetUrl}
-            >
-              <span className={`saved-target-dot ${target.lastStatus}`} />
-              <strong>{target.deviceKey ?? target.label ?? target.targetUrl.replace(/^https?:\/\//, "")}</strong>
-              <em>{target.lastStatus}</em>
-            </button>
-            <button
-              className="saved-target-delete"
-              disabled={isDeleting === target.targetUrl}
-              type="button"
-              onClick={async () => {
-                setIsDeleting(target.targetUrl);
-                try {
-                  await onDelete(target.targetUrl);
-                } finally {
-                  setIsDeleting("");
-                }
-              }}
-              title="移除保存地址和该地址历史数据"
-            >
-              ×
-            </button>
-          </div>
-        );
-      })}
+    <div className="saved-targets">
+      <button
+        aria-expanded={isOpen}
+        className="saved-target-trigger"
+        type="button"
+        onClick={() => setIsOpen((open) => !open)}
+        title={activeTarget.lastError ?? activeTarget.targetUrl}
+      >
+        <span className={`saved-target-dot ${activeTarget.lastStatus}`} />
+        <strong>{activeName}</strong>
+        <em>{activeTarget.lastStatus}</em>
+        <b>{targets.length}</b>
+        <i aria-hidden="true">⌄</i>
+      </button>
+      {isOpen ? (
+        <div className="saved-target-menu" aria-label="已保存设备地址">
+          {targets.map((target) => {
+            const isActive = normalizedActive === target.targetUrl;
+            const name = target.deviceKey ?? target.label ?? target.targetUrl.replace(/^https?:\/\//, "");
+            return (
+              <div className={`saved-target ${isActive ? "active" : ""}`} key={target.targetUrl}>
+                <button
+                  className="saved-target-main"
+                  type="button"
+                  onClick={async () => {
+                    await onSelect(target);
+                    setIsOpen(false);
+                  }}
+                  title={target.lastError ?? target.targetUrl}
+                >
+                  <span className={`saved-target-dot ${target.lastStatus}`} />
+                  <span className="saved-target-copy">
+                    <strong>{name}</strong>
+                    <small>{target.targetUrl}</small>
+                  </span>
+                  <em>{target.lastStatus}</em>
+                </button>
+                <button
+                  className="saved-target-delete"
+                  disabled={isDeleting === target.targetUrl}
+                  type="button"
+                  onClick={async () => {
+                    setIsDeleting(target.targetUrl);
+                    try {
+                      await onDelete(target.targetUrl);
+                    } finally {
+                      setIsDeleting("");
+                    }
+                  }}
+                  title="移除保存地址和该地址历史数据"
+                >
+                  ×
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -697,6 +725,7 @@ function DiagnosticsDeck({
   history: PortHistory;
   machineInfo: MachineInfo;
 }) {
+  const [activeTab, setActiveTab] = React.useState<"info" | "heap" | "ports">("ports");
   const [selectedPortId, setSelectedPortId] = React.useState<number | null>(null);
   const selectedPort = selectedPortId == null
     ? null
@@ -709,23 +738,38 @@ function DiagnosticsDeck({
           <p>IonBridge diagnostics</p>
           <h2>设备资料与端口历史</h2>
         </div>
-        <nav aria-label="诊断视图">
-          <a href="#info">Info</a>
-          <a href="#heap">Heap</a>
-          <a href="#ports">Ports</a>
+        <nav className="diagnostics-tabs" aria-label="诊断视图">
+          {[
+            ["info", "Info"],
+            ["heap", "Heap"],
+            ["ports", "Ports"],
+          ].map(([key, label]) => (
+            <button
+              aria-selected={activeTab === key}
+              className={activeTab === key ? "active" : ""}
+              key={key}
+              onClick={() => setActiveTab(key as "info" | "heap" | "ports")}
+              role="tab"
+              type="button"
+            >
+              {label}
+            </button>
+          ))}
         </nav>
       </div>
-      <div className="diagnostics-grid">
-        <MachineInfoCard machineInfo={machineInfo} />
-        <HeapCard heap={heap} />
+      <div className="diagnostics-tab-panel" role="tabpanel">
+        {activeTab === "info" ? <MachineInfoCard machineInfo={machineInfo} /> : null}
+        {activeTab === "heap" ? <HeapCard heap={heap} /> : null}
+        {activeTab === "ports" ? (
+          <PortHistoryExplorer
+            history={history}
+            ports={metrics.ports}
+            selectedPort={selectedPort}
+            selectedPortId={selectedPortId}
+            onSelectPort={setSelectedPortId}
+          />
+        ) : null}
       </div>
-      <PortHistoryExplorer
-        history={history}
-        ports={metrics.ports}
-        selectedPort={selectedPort}
-        selectedPortId={selectedPortId}
-        onSelectPort={setSelectedPortId}
-      />
     </section>
   );
 }

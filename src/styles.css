@@ -291,16 +291,84 @@ h1 {
 }
 
 .saved-targets {
-  display: flex;
-  max-width: min(100%, 720px);
-  flex-wrap: wrap;
+  position: relative;
+  min-width: min(100%, 320px);
+}
+
+.saved-target-trigger {
+  display: inline-flex;
+  width: 100%;
+  min-height: 40px;
+  align-items: center;
   gap: 8px;
-  justify-content: flex-end;
+  border: 1px solid rgba(243, 109, 22, 0.46);
+  border-radius: 8px;
+  background: rgba(255, 157, 46, 0.12);
+  padding: 0 10px;
+  color: var(--ink);
+  cursor: pointer;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.72) inset;
+}
+
+.saved-target-trigger strong {
+  overflow: hidden;
+  min-width: 0;
+  flex: 1;
+  font-family: "SF Mono", "Cascadia Code", monospace;
+  font-size: 12px;
+  font-weight: 900;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.saved-target-trigger em,
+.saved-target-main em {
+  color: var(--muted);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.saved-target-trigger b {
+  display: grid;
+  min-width: 22px;
+  height: 22px;
+  place-items: center;
+  border-radius: 99px;
+  background: rgba(40, 35, 31, 0.08);
+  color: var(--amber-deep);
+  font-family: "SF Mono", "Cascadia Code", monospace;
+  font-size: 11px;
+}
+
+.saved-target-trigger i {
+  color: var(--muted);
+  font-style: normal;
+  font-weight: 900;
+}
+
+.saved-target-menu {
+  display: grid;
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 8px);
+  right: 0;
+  width: min(420px, calc(100vw - 32px));
+  max-height: 340px;
+  overflow: auto;
+  gap: 6px;
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+  background: rgba(255, 253, 250, 0.96);
+  padding: 8px;
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(12px);
 }
 
 .saved-target {
   display: inline-flex;
-  min-height: 36px;
+  min-height: 48px;
   overflow: hidden;
   border: 1px solid var(--hairline);
   border-radius: 8px;
@@ -323,27 +391,37 @@ h1 {
 
 .saved-target-main {
   display: inline-flex;
-  max-width: 260px;
+  min-width: 0;
+  flex: 1;
   align-items: center;
   gap: 7px;
-  padding: 0 9px;
+  padding: 8px 10px;
 }
 
-.saved-target-main strong {
+.saved-target-copy {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 3px;
+}
+
+.saved-target-copy strong,
+.saved-target-copy small {
   overflow: hidden;
   font-family: "SF Mono", "Cascadia Code", monospace;
-  font-size: 11px;
-  font-weight: 800;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.saved-target-main em {
+.saved-target-copy strong {
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.saved-target-copy small {
   color: var(--muted);
   font-size: 10px;
-  font-style: normal;
-  font-weight: 900;
-  text-transform: uppercase;
+  font-weight: 700;
 }
 
 .saved-target-dot {
@@ -365,7 +443,7 @@ h1 {
 }
 
 .saved-target-delete {
-  width: 28px;
+  width: 36px;
   border-left: 1px solid var(--hairline);
   color: var(--muted);
   font-size: 17px;
@@ -1085,17 +1163,24 @@ h1 {
 
 .diagnostics-deck {
   display: grid;
-  gap: 18px;
+  gap: 14px;
   margin: 18px 0;
 }
 
 .diagnostics-head {
   display: flex;
+  position: sticky;
+  z-index: 10;
+  top: 0;
   align-items: flex-end;
   justify-content: space-between;
   gap: 18px;
-  border-bottom: 2px solid rgba(244, 123, 32, 0.8);
-  padding: 8px 0 14px;
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+  background: rgba(246, 243, 237, 0.86);
+  padding: 12px;
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(10px);
 }
 
 .diagnostics-head p,
@@ -1113,27 +1198,37 @@ h1 {
   line-height: 1.1;
 }
 
-.diagnostics-head nav {
+.diagnostics-tabs {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-}
-
-.diagnostics-head a {
+  gap: 4px;
   border: 1px solid var(--hairline);
   border-radius: 8px;
-  background: rgba(255, 253, 250, 0.78);
-  padding: 10px 14px;
+  background: rgba(40, 35, 31, 0.07);
+  padding: 4px;
+}
+
+.diagnostics-tabs button {
+  min-width: 96px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  padding: 10px 16px;
   color: var(--muted);
   font-size: 14px;
   font-weight: 900;
-  text-decoration: none;
+  cursor: pointer;
 }
 
-.diagnostics-head a:first-child {
-  border-color: rgba(244, 123, 32, 0.28);
-  background: rgba(255, 157, 46, 0.12);
+.diagnostics-tabs button.active {
+  background: var(--paper-strong);
   color: var(--amber-deep);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.72) inset;
+}
+
+.diagnostics-tab-panel {
+  display: grid;
+  min-height: 320px;
 }
 
 .diagnostics-grid {
@@ -1846,6 +1941,16 @@ h1 {
     justify-content: flex-start;
   }
 
+  .saved-targets {
+    width: 100%;
+  }
+
+  .saved-target-menu {
+    right: auto;
+    left: 0;
+    width: min(100%, calc(100vw - 24px));
+  }
+
   .ports-grid,
   .summary-strip {
     grid-template-columns: 1fr;
@@ -1913,12 +2018,16 @@ h1 {
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --paper: #171513;
-    --paper-strong: #211e1a;
-    --ink: #f4eee5;
-    --muted: #b0a59a;
-    --hairline: #403932;
-    --shadow: 0 18px 50px rgba(0, 0, 0, 0.28);
+    --paper: #141210;
+    --paper-strong: #241f1a;
+    --ink: #f7efe4;
+    --muted: #c3b6a7;
+    --hairline: #4c4138;
+    --amber: #ffad4a;
+    --amber-strong: #ff761b;
+    --amber-deep: #ff9b45;
+    --green: #45b99d;
+    --shadow: 0 18px 50px rgba(0, 0, 0, 0.36);
     background: var(--paper);
     color: var(--ink);
   }
@@ -1929,19 +2038,121 @@ h1 {
       linear-gradient(180deg, #1c1916 0%, #141210 100%);
   }
 
+  .login-card,
+  .target-setup-card,
   .summary-item,
   .panel,
   .port-card,
   .diagnostic-card,
+  .diagnostics-head,
   .profile-options button,
   .metric-pill,
   .live-chip,
   .target-control,
-  .saved-target,
+  .saved-target-trigger,
+  .saved-target-menu,
   .history-filters label {
-    background: rgba(35, 31, 27, 0.82);
+    background: rgba(36, 31, 26, 0.92);
     border-color: #463d34;
     box-shadow: 0 1px 0 rgba(255, 255, 255, 0.04) inset;
+  }
+
+  .login-card input,
+  .target-control,
+  .target-control input,
+  .history-filters select,
+  .history-filters input {
+    color: var(--ink);
+  }
+
+  .target-setup-card h1,
+  .login-card h1,
+  .diagnostics-head h2,
+  .diagnostic-title h3,
+  .port-detail-head h3,
+  .port-card h2,
+  .panel-header h2,
+  .summary-item strong,
+  .power-number,
+  .mini-power,
+  .machine-list dd,
+  .port-detail-lists dd {
+    color: var(--ink);
+  }
+
+  .target-setup-card span,
+  .summary-item span,
+  .panel-note,
+  .history-empty span,
+  .port-history-grid p,
+  .machine-list dt,
+  .port-detail-lists dt {
+    color: var(--muted);
+  }
+
+  .target-setup-card .target-control,
+  .login-card input,
+  .saved-target,
+  .port-history-grid button,
+  .port-detail-panel,
+  .history-stats span,
+  .history-empty,
+  .collapsed-hint,
+  .port-grid span {
+    background: rgba(26, 23, 20, 0.88);
+    border-color: rgba(255, 255, 255, 0.09);
+    color: var(--ink);
+  }
+
+  .port-history-grid button {
+    background:
+      linear-gradient(180deg, rgba(56, 48, 41, 0.84), rgba(30, 26, 22, 0.92));
+  }
+
+  .port-history-grid button.active {
+    border-color: var(--amber-strong);
+    box-shadow:
+      0 0 0 2px rgba(255, 118, 27, 0.2),
+      0 18px 40px rgba(0, 0, 0, 0.28);
+  }
+
+  .diagnostics-tabs {
+    background: rgba(0, 0, 0, 0.2);
+    border-color: rgba(255, 255, 255, 0.08);
+  }
+
+  .diagnostics-tabs button {
+    color: #a99b8e;
+  }
+
+  .diagnostics-tabs button.active {
+    background: rgba(255, 118, 27, 0.16);
+    color: #ffd4a8;
+    box-shadow: 0 0 0 1px rgba(255, 118, 27, 0.28) inset;
+  }
+
+  .heap-ring {
+    background:
+      radial-gradient(circle at 50% 50%, #241f1a 0 54%, transparent 55%),
+      conic-gradient(var(--amber-strong) var(--heap), #433a32 0);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+  }
+
+  .bar {
+    background: #342d27;
+  }
+
+  .sparkline line {
+    stroke: rgba(255, 255, 255, 0.18);
+  }
+
+  .mini-footer,
+  .trend-stats,
+  .history-stats,
+  .machine-list div,
+  .port-detail-lists dl div,
+  .system-panel dl div {
+    border-color: rgba(255, 255, 255, 0.1);
   }
 
   .target-control button,
@@ -1949,11 +2160,29 @@ h1 {
     border-color: #463d34;
   }
 
-  .port-grid span,
-  .machine-list div,
-  .port-detail-lists dl div,
-  .system-panel dl div {
-    border-color: rgba(255, 255, 255, 0.08);
+  .saved-target-trigger {
+    background: rgba(255, 118, 27, 0.16);
+    border-color: rgba(255, 118, 27, 0.42);
+    color: var(--ink);
+  }
+
+  .saved-target-trigger b {
+    background: rgba(255, 255, 255, 0.08);
+    color: #ffd4a8;
+  }
+
+  .recharts-cartesian-grid line {
+    stroke: rgba(255, 255, 255, 0.16);
+  }
+
+  .recharts-cartesian-axis-tick-value {
+    fill: #b8aa9b;
+  }
+
+  .recharts-tooltip-wrapper .recharts-default-tooltip {
+    background: #211d19 !important;
+    border-color: #5a4d42 !important;
+    color: var(--ink) !important;
   }
 
   .bar,
