@@ -471,6 +471,13 @@ function parseOptionalTimestamp(value) {
 
 function resolveHistoryKey(target) {
   const normalizedTarget = normalizeTarget(target);
+  const savedTarget = db.prepare(`
+    SELECT device_key FROM targets
+    WHERE target_url = ? AND device_key IS NOT NULL AND device_key != ''
+    LIMIT 1
+  `).get(normalizedTarget);
+  if (savedTarget?.device_key) return { deviceKey: savedTarget.device_key, target: normalizedTarget };
+
   const device = db.prepare(`
     SELECT device_key FROM devices
     WHERE last_target = ?

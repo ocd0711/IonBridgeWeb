@@ -203,16 +203,17 @@ function Header({
           {source === "device" ? "Live" : source === "offline" ? "Offline" : "Mock"}
           {updatedAt ? ` ${updatedAt.toLocaleTimeString("zh-CN", { hour12: false })}` : ""}
         </div>
-        <DeviceTargetControl
-          refreshIntervalMs={refreshIntervalMs}
-          targetUrl={targetUrl}
-          onApply={onApply}
-        />
         <SavedTargetsMenu
           activeTargetUrl={targetUrl}
           targets={savedTargets}
           onSelect={(target) => onApply(target.targetUrl, target.refreshIntervalMs)}
           onDelete={onDeleteTarget}
+        />
+        <DeviceTargetControl
+          mode={savedTargets.length > 0 ? "add" : "edit"}
+          refreshIntervalMs={refreshIntervalMs}
+          targetUrl={targetUrl}
+          onApply={onApply}
         />
       </div>
     </header>
@@ -303,19 +304,21 @@ function SavedTargetsMenu({
 function DeviceTargetControl({
   targetUrl,
   refreshIntervalMs,
+  mode = "edit",
   onApply,
 }: {
   targetUrl: string;
   refreshIntervalMs: number;
+  mode?: "edit" | "add";
   onApply: (targetUrl: string, refreshIntervalMs: number) => void | Promise<void>;
 }) {
-  const [draft, setDraft] = React.useState(targetUrl);
+  const [draft, setDraft] = React.useState(mode === "add" ? "" : targetUrl);
   const [intervalDraft, setIntervalDraft] = React.useState(String(refreshIntervalMs / 1000));
   const [isApplying, setIsApplying] = React.useState(false);
 
   React.useEffect(() => {
-    setDraft(targetUrl);
-  }, [targetUrl]);
+    if (mode === "edit") setDraft(targetUrl);
+  }, [mode, targetUrl]);
 
   React.useEffect(() => {
     setIntervalDraft(String(refreshIntervalMs / 1000));
@@ -327,9 +330,11 @@ function DeviceTargetControl({
       onSubmit={async (event) => {
         event.preventDefault();
         if (isApplying) return;
+        if (!draft.trim()) return;
         setIsApplying(true);
         try {
           await onApply(normalizeDeviceTarget(draft), clampRefreshInterval(Number(intervalDraft) * 1000));
+          if (mode === "add") setDraft("");
         } finally {
           setIsApplying(false);
         }
@@ -339,7 +344,7 @@ function DeviceTargetControl({
         aria-label="设备目标地址"
         value={draft}
         onChange={(event) => setDraft(event.target.value)}
-        placeholder="http://192.168.217.161"
+        placeholder={mode === "add" ? "添加 IP / mDNS 地址" : "http://192.168.217.161"}
       />
       <input
         aria-label="metrics 获取频率秒"
@@ -353,7 +358,7 @@ function DeviceTargetControl({
       />
       <span className="target-unit">s</span>
       <button disabled={isApplying} type="submit">
-        {isApplying ? "正在连接..." : "保存并连接"}
+        {isApplying ? "正在连接..." : mode === "add" ? "添加并连接" : "保存并连接"}
       </button>
     </form>
   );
@@ -425,16 +430,17 @@ function TargetSetupScreen({
               : "请确认设备 IP 或 mDNS 地址，保存后面板会重新拉取 metrics、历史和 Machine Info。"}
           </span>
         </div>
-        <DeviceTargetControl
-          refreshIntervalMs={refreshIntervalMs}
-          targetUrl={targetUrl}
-          onApply={onApply}
-        />
         <SavedTargetsMenu
           activeTargetUrl={targetUrl}
           targets={savedTargets}
           onSelect={(target) => onApply(target.targetUrl, target.refreshIntervalMs)}
           onDelete={onDeleteTarget ?? (() => undefined)}
+        />
+        <DeviceTargetControl
+          mode={savedTargets.length > 0 ? "add" : "edit"}
+          refreshIntervalMs={refreshIntervalMs}
+          targetUrl={targetUrl}
+          onApply={onApply}
         />
         <button
           className="retry-button"
@@ -1582,6 +1588,7 @@ function App() {
     } catch {
       // Dev-server fallback. Vite proxy still uses the local control value.
     }
+    retry();
   }
 
   async function handleDeleteSavedTarget(targetToDelete: string) {
@@ -1597,6 +1604,7 @@ function App() {
     } else {
       setTargetUrl("");
     }
+    retry();
   }
 
   React.useEffect(() => {
