@@ -96,6 +96,7 @@ function clampRefreshInterval(intervalMs: number) {
 function useDashboardData(targetUrl: string, refreshIntervalMs: number) {
   const [data, setData] = React.useState<DashboardData | null>(null);
   const [updatedAt, setUpdatedAt] = React.useState<Date | null>(null);
+  const [refreshToken, setRefreshToken] = React.useState(0);
 
   React.useEffect(() => {
     let alive = true;
@@ -116,9 +117,9 @@ function useDashboardData(targetUrl: string, refreshIntervalMs: number) {
       alive = false;
       window.clearInterval(timer);
     };
-  }, [targetUrl, refreshIntervalMs]);
+  }, [targetUrl, refreshIntervalMs, refreshToken]);
 
-  return { data, updatedAt };
+  return { data, updatedAt, retry: () => setRefreshToken((token) => token + 1) };
 }
 
 function useServerSettings() {
@@ -292,6 +293,41 @@ function LoginScreen({ onLogin }: { onLogin: () => void }) {
         <button type="submit">Login</button>
         {error ? <span>{error}</span> : null}
       </form>
+    </main>
+  );
+}
+
+function TargetSetupScreen({
+  targetUrl,
+  refreshIntervalMs,
+  onTargetChange,
+  onRefreshIntervalChange,
+  onRetry,
+}: {
+  targetUrl: string;
+  refreshIntervalMs: number;
+  onTargetChange: (targetUrl: string) => void;
+  onRefreshIntervalChange: (refreshIntervalMs: number) => void;
+  onRetry: () => void;
+}) {
+  return (
+    <main className="target-setup-screen">
+      <section className="target-setup-card">
+        <div>
+          <p>Target offline</p>
+          <h1>无法连接设备</h1>
+          <span>请确认设备 IP 或 mDNS 地址，保存后面板会重新拉取 metrics、历史和 Machine Info。</span>
+        </div>
+        <DeviceTargetControl
+          refreshIntervalMs={refreshIntervalMs}
+          targetUrl={targetUrl}
+          onRefreshIntervalChange={onRefreshIntervalChange}
+          onTargetChange={onTargetChange}
+        />
+        <button className="retry-button" type="button" onClick={onRetry}>
+          Retry current target
+        </button>
+      </section>
     </main>
   );
 }
@@ -1314,7 +1350,7 @@ function App() {
   const [targetUrl, setTargetUrl] = React.useState(readDeviceTarget);
   const [refreshIntervalMs, setRefreshIntervalMs] = React.useState(readRefreshInterval);
   const { ready, passwordRequired, setPasswordRequired } = useServerSettings();
-  const { data, updatedAt } = useDashboardData(targetUrl, refreshIntervalMs);
+  const { data, updatedAt, retry } = useDashboardData(targetUrl, refreshIntervalMs);
   const [activeProfileKey, setActiveProfileKey] = React.useState<string | null>(null);
 
   async function handleTargetChange(nextTargetUrl: string) {
@@ -1364,6 +1400,18 @@ function App() {
   }
 
   const { metrics, history, heap, machineInfo, source } = data;
+  if (source === "mock") {
+    return (
+      <TargetSetupScreen
+        refreshIntervalMs={refreshIntervalMs}
+        targetUrl={targetUrl}
+        onRefreshIntervalChange={handleRefreshIntervalChange}
+        onRetry={retry}
+        onTargetChange={handleTargetChange}
+      />
+    );
+  }
+
   const detectedProfile = resolveDeviceProfile(machineInfo, metrics.ports);
   const activeProfile =
     deviceProfiles.find((profile) => profile.key === (activeProfileKey ?? detectedProfile.key)) ??

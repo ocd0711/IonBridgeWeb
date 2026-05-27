@@ -1,5 +1,6 @@
 node_modules/
 dist/
+data/
 *.tsbuildinfo
 preview-*.png
 .DS_Store
