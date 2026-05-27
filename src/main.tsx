@@ -3,6 +3,8 @@ import { createRoot } from "react-dom/client";
 import {
   Activity,
   Cpu,
+  Database,
+  Filter,
   Gauge,
   HardDrive,
   Radio,
@@ -20,7 +22,15 @@ import {
   YAxis,
 } from "recharts";
 
-import { defaultDeviceTarget, fetchDashboardData, normalizeDeviceTarget } from "./api";
+import {
+  defaultDeviceTarget,
+  fetchDashboardData,
+  fetchServerHistory,
+  getServerSession,
+  login,
+  normalizeDeviceTarget,
+  saveServerConfig,
+} from "./api";
 import {
   deviceProfiles,
   resolveDeviceProfile,
@@ -37,6 +47,7 @@ import {
   volts,
   watts,
 } from "./format";
+import type { ServerHistoryRow } from "./api";
 import type { HeapMetrics, MachineInfo, Metrics, PortHistory, PortMetrics, TaskMetrics } from "./types";
 import "./styles.css";
 
@@ -108,6 +119,27 @@ function useDashboardData(targetUrl: string, refreshIntervalMs: number) {
   }, [targetUrl, refreshIntervalMs]);
 
   return { data, updatedAt };
+}
+
+function useServerSettings() {
+  const [ready, setReady] = React.useState(false);
+  const [passwordRequired, setPasswordRequired] = React.useState(false);
+
+  React.useEffect(() => {
+    let alive = true;
+    getServerSession().then((session) => {
+      if (!alive) return;
+      if (session) {
+        setPasswordRequired(session.passwordEnabled && !session.authenticated);
+      }
+      setReady(true);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  return { ready, passwordRequired, setPasswordRequired };
 }
 
 function Header({
@@ -226,6 +258,41 @@ function DeviceTargetControl({
       <span className="target-unit">s</span>
       <button type="submit">Apply</button>
     </form>
+  );
+}
+
+function LoginScreen({ onLogin }: { onLogin: () => void }) {
+  const [password, setPassword] = React.useState("");
+  const [error, setError] = React.useState("");
+
+  return (
+    <main className="login-screen">
+      <form
+        className="login-card"
+        onSubmit={async (event) => {
+          event.preventDefault();
+          setError("");
+          try {
+            await login(password);
+            onLogin();
+          } catch {
+            setError("密码不正确");
+          }
+        }}
+      >
+        <p>IonBridgeWeb</p>
+        <h1>登录监控面板</h1>
+        <input
+          autoFocus
+          placeholder="Password"
+          type="password"
+          value={password}
+          onChange={(event) => setPassword(event.target.value)}
+        />
+        <button type="submit">Login</button>
+        {error ? <span>{error}</span> : null}
+      </form>
+    </main>
   );
 }
 
@@ -895,6 +962,192 @@ function ProfileSwitcher({
   );
 }
 
+function LongHistoryPanel({
+  targetUrl,
+  ports,
+  updatedAt,
+}: {
+  targetUrl: string;
+  ports: PortMetrics[];
+  updatedAt: Date | null;
+}) {
+  const [hours, setHours] = React.useState(24);
+  const [portFilter, setPortFilter] = React.useState<number | null>(null);
+  const [rows, setRows] = React.useState<ServerHistoryRow[]>([]);
+  const [status, setStatus] = React.useState<"loading" | "ready" | "empty" | "unavailable">("loading");
+
+  React.useEffect(() => {
+    let alive = true;
+    setStatus("loading");
+    fetchServerHistory({ targetUrl, hours, port: portFilter })
+      .then((nextRows) => {
+        if (!alive) return;
+        setRows(nextRows);
+        setStatus(nextRows.length > 0 ? "ready" : "empty");
+      })
+      .catch(() => {
+        if (!alive) return;
+        setRows([]);
+        setStatus("unavailable");
+      });
+    return () => {
+      alive = false;
+    };
+  }, [targetUrl, hours, portFilter, updatedAt?.getTime()]);
+
+  const chartRows = React.useMemo(() => buildServerHistoryChartRows(rows), [rows]);
+  const powerValues = chartRows.map((row) => row.power);
+  const avgPower = powerValues.reduce((sum, value) => sum + value, 0) / Math.max(powerValues.length, 1);
+  const maxPower = powerValues.length > 0 ? Math.max(...powerValues) : 0;
+  const maxTemp = chartRows.length > 0 ? Math.max(...chartRows.map((row) => row.temperature)) : 0;
+
+  return (
+    <section className="panel long-history-panel">
+      <div className="panel-header long-history-head">
+        <div>
+          <p>Server history</p>
+          <h2>长时间历史与筛选</h2>
+        </div>
+        <div className="history-filters" aria-label="历史筛选">
+          <label>
+            <Filter size={15} />
+            <select value={hours} onChange={(event) => setHours(Number(event.target.value))}>
+              <option value={1}>1h</option>
+              <option value={6}>6h</option>
+              <option value={24}>24h</option>
+              <option value={168}>7d</option>
+              <option value={720}>30d</option>
+            </select>
+          </label>
+          <label>
+            <Database size={15} />
+            <select
+              value={portFilter ?? "all"}
+              onChange={(event) => setPortFilter(event.target.value === "all" ? null : Number(event.target.value))}
+            >
+              <option value="all">All ports</option>
+              {ports.map((port) => (
+                <option key={port.id} value={port.id}>
+                  {port.id === 4 ? "C4 Side" : portLabel(port)}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+      </div>
+
+      {status === "ready" ? (
+        <>
+          <ResponsiveContainer width="100%" height={280}>
+            <ComposedChart data={chartRows} margin={{ top: 10, right: 12, left: -18, bottom: 0 }}>
+              <defs>
+                <linearGradient id="serverHistoryFill" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#f47b20" stopOpacity={0.4} />
+                  <stop offset="100%" stopColor="#f47b20" stopOpacity={0.03} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid stroke="#e6dfd4" vertical={false} />
+              <XAxis dataKey="time" tickLine={false} axisLine={false} tick={{ fill: "#766b5f", fontSize: 12 }} />
+              <YAxis yAxisId="power" tickLine={false} axisLine={false} tick={{ fill: "#766b5f", fontSize: 12 }} />
+              <YAxis
+                yAxisId="temperature"
+                orientation="right"
+                tickLine={false}
+                axisLine={false}
+                tick={{ fill: "#9c4f22", fontSize: 12 }}
+              />
+              <Tooltip
+                contentStyle={{ border: "1px solid #2e2823", borderRadius: 8 }}
+                formatter={(value, name) => name === "temperature" ? `${Number(value).toFixed(0)}C` : `${Number(value).toFixed(2)}W`}
+              />
+              <Area
+                dataKey="power"
+                dot={false}
+                fill="url(#serverHistoryFill)"
+                isAnimationActive={false}
+                stroke="#f47b20"
+                strokeWidth={2.5}
+                type="monotone"
+                yAxisId="power"
+              />
+              <Line
+                connectNulls
+                dataKey="temperature"
+                dot={false}
+                isAnimationActive={false}
+                name="temperature"
+                stroke="#7f6d52"
+                strokeDasharray="5 5"
+                strokeWidth={2}
+                type="monotone"
+                yAxisId="temperature"
+              />
+            </ComposedChart>
+          </ResponsiveContainer>
+          <div className="history-stats">
+            <span>Samples {rows.length}</span>
+            <span>Avg {avgPower.toFixed(2)}W</span>
+            <span>Peak {maxPower.toFixed(2)}W</span>
+            <span>Temp {maxTemp.toFixed(0)}C</span>
+          </div>
+        </>
+      ) : (
+        <div className="history-empty">
+          <strong>
+            {status === "loading"
+              ? "正在读取服务端历史..."
+              : status === "empty"
+                ? "当前筛选范围还没有历史样本"
+                : "当前运行模式没有可用的服务端历史"}
+          </strong>
+          <span>Docker/生产服务会持续写入 `/data/history`，开发模式下仍可使用设备 60 分钟历史。</span>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function buildServerHistoryChartRows(rows: ServerHistoryRow[]) {
+  const bucketMs = chooseHistoryBucketMs(rows);
+  const buckets = new Map<number, Map<number, { power: number; temperature: number }>>();
+  for (const row of rows) {
+    const bucket = Math.floor(row.ts / bucketMs) * bucketMs;
+    const timeline = buckets.get(bucket) ?? new Map<number, { power: number; temperature: number }>();
+    const existing = timeline.get(row.ts) ?? { power: 0, temperature: 0 };
+    existing.power += row.power_w;
+    existing.temperature = Math.max(existing.temperature, row.temperature_c);
+    timeline.set(row.ts, existing);
+    buckets.set(bucket, timeline);
+  }
+
+  return Array.from(buckets.entries())
+    .sort(([a], [b]) => a - b)
+    .map(([ts, timeline]) => {
+      const values = Array.from(timeline.values());
+      return {
+        time: new Date(ts).toLocaleString("zh-CN", {
+          month: "2-digit",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+          hour12: false,
+        }),
+        power: values.reduce((sum, value) => sum + value.power, 0) / Math.max(values.length, 1),
+        temperature: Math.max(...values.map((value) => value.temperature)),
+      };
+    });
+}
+
+function chooseHistoryBucketMs(rows: ServerHistoryRow[]) {
+  if (rows.length < 2) return 60 * 1000;
+  const span = rows[rows.length - 1].ts - rows[0].ts;
+  if (span > 7 * 24 * 60 * 60 * 1000) return 60 * 60 * 1000;
+  if (span > 24 * 60 * 60 * 1000) return 15 * 60 * 1000;
+  if (span > 6 * 60 * 60 * 1000) return 5 * 60 * 1000;
+  return 60 * 1000;
+}
+
 function PowerChart({ history }: { history: PortHistory }) {
   const basePort = history.ports.reduce(
     (longest, port) => (port.samples.length > longest.samples.length ? port : longest),
@@ -1060,19 +1313,50 @@ function RuntimePanel({ metrics, heap }: { metrics: Metrics; heap: HeapMetrics }
 function App() {
   const [targetUrl, setTargetUrl] = React.useState(readDeviceTarget);
   const [refreshIntervalMs, setRefreshIntervalMs] = React.useState(readRefreshInterval);
+  const { ready, passwordRequired, setPasswordRequired } = useServerSettings();
   const { data, updatedAt } = useDashboardData(targetUrl, refreshIntervalMs);
   const [activeProfileKey, setActiveProfileKey] = React.useState<string | null>(null);
 
-  function handleTargetChange(nextTargetUrl: string) {
+  async function handleTargetChange(nextTargetUrl: string) {
     setTargetUrl(nextTargetUrl);
     setActiveProfileKey(null);
     writeDeviceTarget(nextTargetUrl);
+    try {
+      await saveServerConfig({ targetUrl: nextTargetUrl, refreshIntervalMs });
+    } catch {
+      // Dev-server fallback. Vite proxy still uses the local control value.
+    }
   }
 
-  function handleRefreshIntervalChange(nextRefreshIntervalMs: number) {
+  async function handleRefreshIntervalChange(nextRefreshIntervalMs: number) {
     const clamped = clampRefreshInterval(nextRefreshIntervalMs);
     setRefreshIntervalMs(clamped);
     writeRefreshInterval(clamped);
+    try {
+      await saveServerConfig({ targetUrl, refreshIntervalMs: clamped });
+    } catch {
+      // Dev-server fallback. Local polling still uses the configured interval.
+    }
+  }
+
+  React.useEffect(() => {
+    getServerSession().then((session) => {
+      if (!session || !session.authenticated) return;
+      const serverTarget = normalizeDeviceTarget(session.config.targetUrl);
+      const serverInterval = clampRefreshInterval(session.config.refreshIntervalMs);
+      setTargetUrl(serverTarget);
+      setRefreshIntervalMs(serverInterval);
+      writeDeviceTarget(serverTarget);
+      writeRefreshInterval(serverInterval);
+    });
+  }, [passwordRequired]);
+
+  if (!ready) {
+    return <main className="loading">ingBar warming up...</main>;
+  }
+
+  if (passwordRequired) {
+    return <LoginScreen onLogin={() => setPasswordRequired(false)} />;
   }
 
   if (!data) {
@@ -1113,6 +1397,7 @@ function App() {
         <PowerChart history={history} />
         <RuntimePanel metrics={metrics} heap={heap} />
       </section>
+      <LongHistoryPanel targetUrl={targetUrl} ports={metrics.ports} updatedAt={updatedAt} />
       <DiagnosticsDeck heap={heap} history={history} machineInfo={machineInfo} metrics={metrics} />
     </main>
   );

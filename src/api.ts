@@ -25,6 +25,82 @@ export function defaultDeviceTarget() {
   return DEFAULT_DEVICE_TARGET;
 }
 
+export type ServerSession = {
+  passwordEnabled: boolean;
+  authenticated: boolean;
+  config: {
+    targetUrl: string;
+    refreshIntervalMs: number;
+  };
+};
+
+export type ServerHistoryRow = {
+  ts: number;
+  target: string;
+  port: number;
+  voltage: number;
+  current: number;
+  temperature_c: number;
+  power_w: number;
+  attached: boolean;
+  protocol: string;
+};
+
+export async function getServerSession(): Promise<ServerSession | null> {
+  try {
+    const response = await fetch("/api/session", { cache: "no-store" });
+    if (!response.ok) return null;
+    return response.json() as Promise<ServerSession>;
+  } catch {
+    return null;
+  }
+}
+
+export async function login(password: string): Promise<ServerSession> {
+  const response = await fetch("/api/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ password }),
+  });
+  if (!response.ok) {
+    throw new Error("Password rejected");
+  }
+  return response.json() as Promise<ServerSession>;
+}
+
+export async function saveServerConfig(config: { targetUrl: string; refreshIntervalMs: number }) {
+  const response = await fetch("/api/config", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(config),
+  });
+  if (!response.ok) {
+    throw new Error("Failed to save server config");
+  }
+  return response.json() as Promise<ServerSession["config"]>;
+}
+
+export async function fetchServerHistory({
+  targetUrl,
+  hours,
+  port,
+}: {
+  targetUrl: string;
+  hours: number;
+  port: number | null;
+}): Promise<ServerHistoryRow[]> {
+  const params = new URLSearchParams({
+    target: normalizeDeviceTarget(targetUrl),
+    hours: String(hours),
+  });
+  if (port != null) params.set("port", String(port));
+
+  const response = await fetch(`/api/history?${params.toString()}`, { cache: "no-store" });
+  if (!response.ok) throw new Error("Server history unavailable");
+  const payload = await response.json() as { rows?: ServerHistoryRow[] };
+  return payload.rows ?? [];
+}
+
 async function getJson<T>(path: string, targetUrl: string, timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> {
   const response = await fetchWithTimeout(endpoint(path, targetUrl), timeoutMs);
   if (!response.ok) {
