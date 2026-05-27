@@ -23,7 +23,6 @@ import {
 } from "recharts";
 
 import {
-  defaultDeviceTarget,
   fetchDashboardData,
   fetchServerHistory,
   getServerSession,
@@ -61,15 +60,19 @@ const DEFAULT_REFRESH_INTERVAL_MS = 30000;
 
 function readDeviceTarget() {
   try {
-    return localStorage.getItem(DEVICE_TARGET_STORAGE_KEY) ?? defaultDeviceTarget();
+    return localStorage.getItem(DEVICE_TARGET_STORAGE_KEY) ?? "";
   } catch {
-    return defaultDeviceTarget();
+    return "";
   }
 }
 
 function writeDeviceTarget(targetUrl: string) {
   try {
-    localStorage.setItem(DEVICE_TARGET_STORAGE_KEY, targetUrl);
+    if (targetUrl) {
+      localStorage.setItem(DEVICE_TARGET_STORAGE_KEY, targetUrl);
+    } else {
+      localStorage.removeItem(DEVICE_TARGET_STORAGE_KEY);
+    }
   } catch {
     // Non-critical. The current session still uses the configured target.
   }
@@ -1618,6 +1621,7 @@ function App() {
       writeRefreshInterval(nextInterval);
     } else {
       setTargetUrl("");
+      writeDeviceTarget("");
     }
     retry();
   }
@@ -1633,6 +1637,9 @@ function App() {
         const serverTarget = normalizeDeviceTarget(session.config.targetUrl);
         setTargetUrl(serverTarget);
         writeDeviceTarget(serverTarget);
+      } else {
+        setTargetUrl("");
+        writeDeviceTarget("");
       }
     });
   }, [passwordRequired]);
