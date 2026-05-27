@@ -65,6 +65,17 @@ input {
   padding: 24px;
 }
 
+.login-shell {
+  display: grid;
+  width: min(100%, 760px);
+  grid-template-columns: minmax(320px, 0.9fr) minmax(260px, 1fr);
+  overflow: hidden;
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  background: rgba(255, 253, 250, 0.86);
+  box-shadow: var(--shadow);
+}
+
 .login-card,
 .target-setup-card {
   display: grid;
@@ -75,6 +86,32 @@ input {
   background: rgba(255, 253, 250, 0.86);
   padding: 24px;
   box-shadow: var(--shadow);
+}
+
+.login-shell .login-card {
+  width: 100%;
+  align-content: center;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.login-product {
+  display: grid;
+  min-height: 360px;
+  place-items: center;
+  border-left: 1px solid var(--hairline);
+  background:
+    radial-gradient(circle at 50% 48%, rgba(255, 157, 46, 0.16), transparent 54%),
+    linear-gradient(180deg, rgba(255, 246, 235, 0.74), rgba(231, 222, 210, 0.56));
+  padding: 34px;
+}
+
+.login-product img {
+  width: min(100%, 300px);
+  height: auto;
+  filter: drop-shadow(0 24px 34px rgba(68, 52, 38, 0.18));
 }
 
 .target-setup-card {
@@ -1934,6 +1971,21 @@ h1 {
     padding-top: 18px;
   }
 
+  .login-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .login-product {
+    min-height: 220px;
+    border-top: 1px solid var(--hairline);
+    border-left: 0;
+    padding: 24px;
+  }
+
+  .login-product img {
+    width: min(72%, 220px);
+  }
+
   .app-header {
     align-items: flex-start;
     flex-direction: column;
@@ -2059,6 +2111,7 @@ h1 {
   }
 
   .login-card,
+  .login-shell,
   .target-setup-card,
   .summary-item,
   .panel,
@@ -2075,6 +2128,22 @@ h1 {
     background: rgba(36, 31, 26, 0.92);
     border-color: #463d34;
     box-shadow: 0 1px 0 rgba(255, 255, 255, 0.04) inset;
+  }
+
+  .login-shell .login-card {
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .login-product {
+    border-color: #463d34;
+    background:
+      radial-gradient(circle at 50% 48%, rgba(255, 118, 27, 0.14), transparent 54%),
+      linear-gradient(180deg, rgba(42, 35, 29, 0.9), rgba(24, 21, 18, 0.96));
+  }
+
+  .login-product img {
+    filter: drop-shadow(0 26px 40px rgba(0, 0, 0, 0.34));
   }
 
   .login-card input,

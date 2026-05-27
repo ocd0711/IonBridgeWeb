@@ -381,31 +381,36 @@ function LoginScreen({ onLogin }: { onLogin: () => void }) {
 
   return (
     <main className="login-screen">
-      <form
-        className="login-card"
-        onSubmit={async (event) => {
-          event.preventDefault();
-          setError("");
-          try {
-            await login(password);
-            onLogin();
-          } catch {
-            setError("密码不正确");
-          }
-        }}
-      >
-        <p>IonBridgeWeb</p>
-        <h1>登录监控面板</h1>
-        <input
-          autoFocus
-          placeholder="Password"
-          type="password"
-          value={password}
-          onChange={(event) => setPassword(event.target.value)}
-        />
-        <button type="submit">Login</button>
-        {error ? <span>{error}</span> : null}
-      </form>
+      <section className="login-shell">
+        <form
+          className="login-card"
+          onSubmit={async (event) => {
+            event.preventDefault();
+            setError("");
+            try {
+              await login(password);
+              onLogin();
+            } catch {
+              setError("密码不正确");
+            }
+          }}
+        >
+          <p>IonBridgeWeb</p>
+          <h1>登录监控面板</h1>
+          <input
+            autoFocus
+            placeholder="Password"
+            type="password"
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+          />
+          <button type="submit">Login</button>
+          {error ? <span>{error}</span> : null}
+        </form>
+        <aside className="login-product" aria-label="小电拼产品图">
+          <img src="/login-product.png" alt="" />
+        </aside>
+      </section>
     </main>
   );
 }
