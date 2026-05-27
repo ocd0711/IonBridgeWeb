@@ -161,6 +161,7 @@ function Header({
   onApply,
   onSelectSavedTarget,
   onDeleteTarget,
+  connectionActionPending,
 }: {
   metrics: Metrics;
   profile: DeviceVisualProfile;
@@ -172,6 +173,7 @@ function Header({
   onApply: (targetUrl: string, refreshIntervalMs: number) => void | Promise<void>;
   onSelectSavedTarget: (target: SavedTarget) => void | Promise<void>;
   onDeleteTarget: (targetUrl: string) => void | Promise<void>;
+  connectionActionPending?: boolean;
 }) {
   const totalPower = metrics.ports.reduce((sum, port) => sum + watts(port), 0);
   const hottest = Math.max(...metrics.ports.map((port) => port.die_temperature));
@@ -211,11 +213,14 @@ function Header({
         </div>
         <SavedTargetsMenu
           activeTargetUrl={targetUrl}
+          disabled={connectionActionPending}
           targets={savedTargets}
           onSelect={onSelectSavedTarget}
           onDelete={onDeleteTarget}
         />
         <DeviceTargetControl
+          disabled={connectionActionPending}
+          busy={connectionActionPending}
           mode={savedTargets.length > 0 ? "add" : "edit"}
           refreshIntervalMs={refreshIntervalMs}
           targetUrl={targetUrl}
@@ -228,11 +233,13 @@ function Header({
 
 function SavedTargetsMenu({
   activeTargetUrl,
+  disabled = false,
   targets,
   onSelect,
   onDelete,
 }: {
   activeTargetUrl: string;
+  disabled?: boolean;
   targets: SavedTarget[];
   onSelect: (target: SavedTarget) => void | Promise<void>;
   onDelete: (targetUrl: string) => void | Promise<void>;
@@ -268,8 +275,10 @@ function SavedTargetsMenu({
               <div className={`saved-target ${isActive ? "active" : ""}`} key={target.targetUrl}>
                 <button
                   className="saved-target-main"
+                  disabled={disabled}
                   type="button"
                   onClick={async () => {
+                    if (disabled) return;
                     await onSelect(target);
                     setIsOpen(false);
                   }}
@@ -284,9 +293,10 @@ function SavedTargetsMenu({
                 </button>
                 <button
                   className="saved-target-delete"
-                  disabled={isDeleting === target.targetUrl}
+                  disabled={disabled || isDeleting === target.targetUrl}
                   type="button"
                   onClick={async () => {
+                    if (disabled) return;
                     setIsDeleting(target.targetUrl);
                     try {
                       await onDelete(target.targetUrl);
@@ -310,11 +320,15 @@ function SavedTargetsMenu({
 function DeviceTargetControl({
   targetUrl,
   refreshIntervalMs,
+  disabled = false,
+  busy = false,
   mode = "edit",
   onApply,
 }: {
   targetUrl: string;
   refreshIntervalMs: number;
+  disabled?: boolean;
+  busy?: boolean;
   mode?: "edit" | "add";
   onApply: (targetUrl: string, refreshIntervalMs: number) => void | Promise<void>;
 }) {
@@ -336,7 +350,7 @@ function DeviceTargetControl({
       className="target-control"
       onSubmit={async (event) => {
         event.preventDefault();
-        if (isApplying) return;
+        if (isApplying || disabled) return;
         if (!draft.trim()) return;
         setIsApplying(true);
         setError("");
@@ -352,6 +366,7 @@ function DeviceTargetControl({
     >
       <input
         aria-label="设备目标地址"
+        disabled={isApplying || disabled}
         value={draft}
         onChange={(event) => setDraft(event.target.value)}
         placeholder={mode === "add" ? "添加 IP / mDNS 地址" : "http://192.168.217.161"}
@@ -363,12 +378,13 @@ function DeviceTargetControl({
         max="60"
         step="1"
         type="number"
+        disabled={isApplying || disabled}
         value={intervalDraft}
         onChange={(event) => setIntervalDraft(event.target.value)}
       />
       <span className="target-unit">s</span>
-      <button disabled={isApplying} type="submit">
-        {isApplying ? "正在连接..." : mode === "add" ? "添加并连接" : "保存并连接"}
+      <button disabled={isApplying || disabled} type="submit">
+        {isApplying || busy ? "正在连接..." : mode === "add" ? "添加并连接" : "保存并连接"}
       </button>
       {error ? <strong className="target-error">{error}</strong> : null}
     </form>
@@ -420,6 +436,7 @@ function TargetSetupScreen({
   refreshIntervalMs,
   savedTargets = [],
   state = "offline",
+  connectionActionPending = false,
   onApply,
   onSelectSavedTarget,
   onDeleteTarget,
@@ -429,6 +446,7 @@ function TargetSetupScreen({
   refreshIntervalMs: number;
   savedTargets?: SavedTarget[];
   state?: "connecting" | "offline";
+  connectionActionPending?: boolean;
   onApply: (targetUrl: string, refreshIntervalMs: number) => void | Promise<void>;
   onSelectSavedTarget: (target: SavedTarget) => void | Promise<void>;
   onDeleteTarget?: (targetUrl: string) => void | Promise<void>;
@@ -436,6 +454,7 @@ function TargetSetupScreen({
 }) {
   const isConnecting = state === "connecting";
   const [isRetrying, setIsRetrying] = React.useState(false);
+  const retryDisabled = isRetrying || isConnecting || connectionActionPending;
   return (
     <main className="target-setup-screen">
       <section className="target-setup-card">
@@ -450,11 +469,14 @@ function TargetSetupScreen({
         </div>
         <SavedTargetsMenu
           activeTargetUrl={targetUrl}
+          disabled={connectionActionPending || isRetrying}
           targets={savedTargets}
           onSelect={onSelectSavedTarget}
           onDelete={onDeleteTarget ?? (() => undefined)}
         />
         <DeviceTargetControl
+          disabled={connectionActionPending || isRetrying}
+          busy={connectionActionPending}
           mode={savedTargets.length > 0 ? "add" : "edit"}
           refreshIntervalMs={refreshIntervalMs}
           targetUrl={targetUrl}
@@ -462,15 +484,16 @@ function TargetSetupScreen({
         />
         <button
           className="retry-button"
-          disabled={isRetrying || isConnecting}
+          disabled={retryDisabled}
           type="button"
           onClick={() => {
+            if (retryDisabled) return;
             setIsRetrying(true);
             onRetry();
             window.setTimeout(() => setIsRetrying(false), 900);
           }}
         >
-          {isConnecting ? "正在连接..." : isRetrying ? "正在重试..." : "重试当前地址"}
+          {isConnecting || connectionActionPending ? "正在连接..." : isRetrying ? "正在重试..." : "重试当前地址"}
         </button>
       </section>
     </main>
@@ -1586,49 +1609,69 @@ function App() {
   const { ready, passwordRequired, setPasswordRequired } = useServerSettings();
   const { data, updatedAt, retry } = useDashboardData(targetUrl, refreshIntervalMs);
   const [activeProfileKey, setActiveProfileKey] = React.useState<string | null>(null);
+  const [connectionActionPending, setConnectionActionPending] = React.useState(false);
+  const connectionActionPendingRef = React.useRef(false);
+
+  async function runConnectionAction(action: () => Promise<void>) {
+    if (connectionActionPendingRef.current) return;
+    connectionActionPendingRef.current = true;
+    setConnectionActionPending(true);
+    try {
+      await action();
+    } finally {
+      connectionActionPendingRef.current = false;
+      setConnectionActionPending(false);
+    }
+  }
 
   async function handleConnectionSettingsApply(nextTargetUrl: string, nextRefreshIntervalMs: number) {
-    const clamped = clampRefreshInterval(nextRefreshIntervalMs);
-    const saved = await saveServerConfig({ targetUrl: nextTargetUrl, refreshIntervalMs: clamped });
-    const savedTarget = normalizeDeviceTarget(saved.targetUrl);
-    const savedInterval = clampRefreshInterval(saved.refreshIntervalMs);
-    setActiveProfileKey(null);
-    setSavedTargets(saved.targets);
-    setTargetUrl(savedTarget);
-    setRefreshIntervalMs(savedInterval);
-    writeDeviceTarget(savedTarget);
-    writeRefreshInterval(savedInterval);
-    retry();
+    await runConnectionAction(async () => {
+      const clamped = clampRefreshInterval(nextRefreshIntervalMs);
+      const saved = await saveServerConfig({ targetUrl: nextTargetUrl, refreshIntervalMs: clamped });
+      const savedTarget = normalizeDeviceTarget(saved.targetUrl);
+      const savedInterval = clampRefreshInterval(saved.refreshIntervalMs);
+      setActiveProfileKey(null);
+      setSavedTargets(saved.targets);
+      setTargetUrl(savedTarget);
+      setRefreshIntervalMs(savedInterval);
+      writeDeviceTarget(savedTarget);
+      writeRefreshInterval(savedInterval);
+      retry();
+    });
   }
 
   async function handleSavedTargetSelect(target: SavedTarget) {
-    const saved = await setActiveServerTarget(target.targetUrl);
-    const savedTarget = normalizeDeviceTarget(saved.targetUrl);
-    const savedInterval = clampRefreshInterval(saved.refreshIntervalMs);
-    setActiveProfileKey(null);
-    setSavedTargets(saved.targets);
-    setTargetUrl(savedTarget);
-    setRefreshIntervalMs(savedInterval);
-    writeDeviceTarget(savedTarget);
-    writeRefreshInterval(savedInterval);
-    retry();
+    await runConnectionAction(async () => {
+      const saved = await setActiveServerTarget(target.targetUrl);
+      const savedTarget = normalizeDeviceTarget(saved.targetUrl);
+      const savedInterval = clampRefreshInterval(saved.refreshIntervalMs);
+      setActiveProfileKey(null);
+      setSavedTargets(saved.targets);
+      setTargetUrl(savedTarget);
+      setRefreshIntervalMs(savedInterval);
+      writeDeviceTarget(savedTarget);
+      writeRefreshInterval(savedInterval);
+      retry();
+    });
   }
 
   async function handleDeleteSavedTarget(targetToDelete: string) {
-    const saved = await deleteSavedTarget(targetToDelete);
-    setSavedTargets(saved.targets);
-    if (saved.targetUrl) {
-      const nextTarget = normalizeDeviceTarget(saved.targetUrl);
-      const nextInterval = clampRefreshInterval(saved.refreshIntervalMs);
-      setTargetUrl(nextTarget);
-      setRefreshIntervalMs(nextInterval);
-      writeDeviceTarget(nextTarget);
-      writeRefreshInterval(nextInterval);
-    } else {
-      setTargetUrl("");
-      writeDeviceTarget("");
-    }
-    retry();
+    await runConnectionAction(async () => {
+      const saved = await deleteSavedTarget(targetToDelete);
+      setSavedTargets(saved.targets);
+      if (saved.targetUrl) {
+        const nextTarget = normalizeDeviceTarget(saved.targetUrl);
+        const nextInterval = clampRefreshInterval(saved.refreshIntervalMs);
+        setTargetUrl(nextTarget);
+        setRefreshIntervalMs(nextInterval);
+        writeDeviceTarget(nextTarget);
+        writeRefreshInterval(nextInterval);
+      } else {
+        setTargetUrl("");
+        writeDeviceTarget("");
+      }
+      retry();
+    });
   }
 
   React.useEffect(() => {
@@ -1672,6 +1715,7 @@ function App() {
         state={targetUrl.trim() ? "connecting" : "offline"}
         targetUrl={targetUrl}
         savedTargets={savedTargets}
+        connectionActionPending={connectionActionPending}
         onApply={handleConnectionSettingsApply}
         onSelectSavedTarget={handleSavedTargetSelect}
         onDeleteTarget={handleDeleteSavedTarget}
@@ -1687,6 +1731,7 @@ function App() {
         refreshIntervalMs={refreshIntervalMs}
         targetUrl={targetUrl}
         savedTargets={savedTargets}
+        connectionActionPending={connectionActionPending}
         onApply={handleConnectionSettingsApply}
         onSelectSavedTarget={handleSavedTargetSelect}
         onDeleteTarget={handleDeleteSavedTarget}
@@ -1710,6 +1755,7 @@ function App() {
         refreshIntervalMs={refreshIntervalMs}
         savedTargets={savedTargets}
         updatedAt={updatedAt}
+        connectionActionPending={connectionActionPending}
         onApply={handleConnectionSettingsApply}
         onSelectSavedTarget={handleSavedTargetSelect}
         onDeleteTarget={handleDeleteSavedTarget}

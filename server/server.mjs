@@ -11,6 +11,7 @@ const distDir = join(rootDir, "dist");
 const dataDir = process.env.IONBRIDGE_DATA_DIR ?? "/data";
 const databasePath = join(dataDir, "ionbridge.db");
 const defaultIntervalMs = 30000;
+const deviceIdentityTimeoutMs = 10000;
 const retentionDays = Math.max(1, Math.round(Number(process.env.IONBRIDGE_RETENTION_DAYS ?? 30)));
 const passwordHash = process.env.IONBRIDGE_PASSWORD
   ? createHash("sha256").update(process.env.IONBRIDGE_PASSWORD).digest("hex")
@@ -394,7 +395,7 @@ function insertSamples(rows) {
 }
 
 async function fetchMachineInfo(target) {
-  const html = await fetchText(new URL("/", normalizeTarget(target)).toString(), 4000);
+  const html = await fetchText(new URL("/", normalizeTarget(target)).toString(), deviceIdentityTimeoutMs);
   const match = html.match(/window\.__INFOZ=(\{.*?\});/);
   if (!match) throw new Error("window.__INFOZ not found");
   return JSON.parse(match[1]);

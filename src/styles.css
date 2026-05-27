@@ -184,6 +184,7 @@ input {
 }
 
 .retry-button:disabled,
+.target-control input:disabled,
 .target-control button:disabled {
   cursor: progress;
   opacity: 0.68;
@@ -510,6 +511,11 @@ h1 {
 .saved-target-delete:disabled {
   cursor: progress;
   opacity: 0.55;
+}
+
+.saved-target-main:disabled {
+  cursor: progress;
+  opacity: 0.64;
 }
 
 .device-panel {
