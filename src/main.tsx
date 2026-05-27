@@ -213,10 +213,11 @@ function DeviceTargetControl({
 }: {
   targetUrl: string;
   refreshIntervalMs: number;
-  onApply: (targetUrl: string, refreshIntervalMs: number) => void;
+  onApply: (targetUrl: string, refreshIntervalMs: number) => void | Promise<void>;
 }) {
   const [draft, setDraft] = React.useState(targetUrl);
   const [intervalDraft, setIntervalDraft] = React.useState(String(refreshIntervalMs / 1000));
+  const [isApplying, setIsApplying] = React.useState(false);
 
   React.useEffect(() => {
     setDraft(targetUrl);
@@ -229,9 +230,15 @@ function DeviceTargetControl({
   return (
     <form
       className="target-control"
-      onSubmit={(event) => {
+      onSubmit={async (event) => {
         event.preventDefault();
-        onApply(normalizeDeviceTarget(draft), clampRefreshInterval(Number(intervalDraft) * 1000));
+        if (isApplying) return;
+        setIsApplying(true);
+        try {
+          await onApply(normalizeDeviceTarget(draft), clampRefreshInterval(Number(intervalDraft) * 1000));
+        } finally {
+          setIsApplying(false);
+        }
       }}
     >
       <input
@@ -251,7 +258,9 @@ function DeviceTargetControl({
         onChange={(event) => setIntervalDraft(event.target.value)}
       />
       <span className="target-unit">s</span>
-      <button type="submit">Apply</button>
+      <button disabled={isApplying} type="submit">
+        {isApplying ? "正在连接..." : "保存并连接"}
+      </button>
     </form>
   );
 }
@@ -301,10 +310,11 @@ function TargetSetupScreen({
   targetUrl: string;
   refreshIntervalMs: number;
   state?: "connecting" | "offline";
-  onApply: (targetUrl: string, refreshIntervalMs: number) => void;
+  onApply: (targetUrl: string, refreshIntervalMs: number) => void | Promise<void>;
   onRetry: () => void;
 }) {
   const isConnecting = state === "connecting";
+  const [isRetrying, setIsRetrying] = React.useState(false);
   return (
     <main className="target-setup-screen">
       <section className="target-setup-card">
@@ -322,8 +332,17 @@ function TargetSetupScreen({
           targetUrl={targetUrl}
           onApply={onApply}
         />
-        <button className="retry-button" type="button" onClick={onRetry}>
-          {isConnecting ? "Retry now" : "Retry current target"}
+        <button
+          className="retry-button"
+          disabled={isRetrying}
+          type="button"
+          onClick={() => {
+            setIsRetrying(true);
+            onRetry();
+            window.setTimeout(() => setIsRetrying(false), 900);
+          }}
+        >
+          {isRetrying ? "正在重试..." : isConnecting ? "重试已保存地址" : "重试当前地址"}
         </button>
       </section>
     </main>
