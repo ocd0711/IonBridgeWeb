@@ -235,7 +235,6 @@ const translations = {
     ledStrip: "LED power strip",
     deviceFront: "Device front face",
     sideC4: "Side C4 port",
-    sidePort: "Side port",
     attached: "Attached",
     idle: "Idle",
     portLimit: "Port limit",
@@ -1125,7 +1124,7 @@ function SidePortFace({ port, profile }: { port: PortMetrics; profile: DeviceVis
       <div className="side-seam" />
       <div className="side-brand">{profile.sidePortLabel}</div>
       <DevicePort port={port} />
-      <div className="side-caption">{t("sidePort")}</div>
+      <div className="side-caption">SIDE PORT</div>
     </aside>
   );
 }
@@ -1331,7 +1330,7 @@ function PortHistoryExplorer({
   const selectedSeries = selectedSamples.map((sample, index) => ({
     time: formatSampleTime(sample.ts, selectedSamples.length, index, history.sample_period_ms),
     power: samplePower(sample),
-    temperature: sample.temperature_c ?? selectedPort?.die_temperature,
+    temperature: validTemperature(sample.temperature_c) ?? validTemperature(selectedPort?.die_temperature),
     voltage: volts(sample.voltage),
     current: amps(sample.current),
   }));
@@ -1408,7 +1407,7 @@ function PortHistoryExplorer({
               axisLine={false}
               tick={{ fill: "#9c4f22", fontSize: 12 }}
             />
-            <Tooltip formatter={(value, name) => name === "temperature" ? `${Number(value).toFixed(0)}C` : `${Number(value).toFixed(2)}W`} />
+            <Tooltip formatter={(value, name) => name === "temperature" ? formatTemperatureTooltip(value) : `${Number(value).toFixed(2)}W`} />
             <Area
               dataKey="power"
               dot={false}
@@ -1539,6 +1538,19 @@ function getPortSamples(history: PortHistory, portId: number) {
 
 function samplePower(sample: { voltage: number; current: number }) {
   return (sample.voltage * sample.current) / 1_000_000;
+}
+
+function validTemperature(value: number | undefined | null) {
+  return Number.isFinite(value) && Number(value) > 0 ? Number(value) : null;
+}
+
+function maxValidTemperature(values: Array<number | null | undefined>) {
+  const valid = values.map(validTemperature).filter((value): value is number => value != null);
+  return valid.length > 0 ? Math.max(...valid) : null;
+}
+
+function formatTemperatureTooltip(value: unknown) {
+  return typeof value === "number" && value > 0 ? `${value.toFixed(0)}C` : "N/A";
 }
 
 function getHistoryCoverageLabel(history: PortHistory, t: (key: TranslationKey) => string) {
@@ -1716,7 +1728,7 @@ function LongHistoryPanel({
   const powerValues = chartRows.map((row) => row.power);
   const avgPower = powerValues.reduce((sum, value) => sum + value, 0) / Math.max(powerValues.length, 1);
   const maxPower = powerValues.length > 0 ? Math.max(...powerValues) : 0;
-  const maxTemp = chartRows.length > 0 ? Math.max(...chartRows.map((row) => row.temperature)) : 0;
+  const maxTemp = maxValidTemperature(chartRows.map((row) => row.temperature));
 
   return (
     <section className="panel long-history-panel" id="history">
@@ -1793,7 +1805,7 @@ function LongHistoryPanel({
               />
               <Tooltip
                 contentStyle={{ border: "1px solid #2e2823", borderRadius: 8 }}
-                formatter={(value, name) => name === "temperature" ? `${Number(value).toFixed(0)}C` : `${Number(value).toFixed(2)}W`}
+                formatter={(value, name) => name === "temperature" ? formatTemperatureTooltip(value) : `${Number(value).toFixed(2)}W`}
               />
               <Area
                 dataKey="power"
@@ -1823,7 +1835,7 @@ function LongHistoryPanel({
             <span>{t("samples")} {rows.length}</span>
             <span>{t("avg")} {avgPower.toFixed(2)}W</span>
             <span>{t("max")} {maxPower.toFixed(2)}W</span>
-            <span>{t("highestTemp")} {maxTemp.toFixed(0)}C</span>
+            <span>{t("highestTemp")} {maxTemp == null ? "N/A" : `${maxTemp.toFixed(0)}C`}</span>
           </div>
         </>
       ) : (
@@ -1856,13 +1868,16 @@ function parseDateTimeLocal(value: string) {
 
 function buildServerHistoryChartRows(rows: ServerHistoryRow[]) {
   const bucketMs = chooseHistoryBucketMs(rows);
-  const buckets = new Map<number, Map<number, { power: number; temperature: number }>>();
+  const buckets = new Map<number, Map<number, { power: number; temperature: number | null }>>();
   for (const row of rows) {
     const bucket = Math.floor(row.ts / bucketMs) * bucketMs;
-    const timeline = buckets.get(bucket) ?? new Map<number, { power: number; temperature: number }>();
-    const existing = timeline.get(row.ts) ?? { power: 0, temperature: 0 };
+    const timeline = buckets.get(bucket) ?? new Map<number, { power: number; temperature: number | null }>();
+    const existing = timeline.get(row.ts) ?? { power: 0, temperature: null };
+    const temperature = validTemperature(row.temperature_c);
     existing.power += row.power_w;
-    existing.temperature = Math.max(existing.temperature, row.temperature_c);
+    existing.temperature = temperature == null
+      ? existing.temperature
+      : Math.max(existing.temperature ?? temperature, temperature);
     timeline.set(row.ts, existing);
     buckets.set(bucket, timeline);
   }
@@ -1881,7 +1896,7 @@ function buildServerHistoryChartRows(rows: ServerHistoryRow[]) {
           hour12: false,
         }),
         power: values.reduce((sum, value) => sum + value.power, 0) / Math.max(values.length, 1),
-        temperature: Math.max(...values.map((value) => value.temperature)),
+        temperature: maxValidTemperature(values.map((value) => value.temperature)),
       };
     });
 }
@@ -1902,7 +1917,7 @@ function PowerChart({ history }: { history: PortHistory }) {
     history.ports[0],
   );
   const rows = basePort?.samples.map((_, sampleIndex) => {
-    const row: Record<string, number | string> = {
+    const row: Record<string, number | string | null> = {
       time: formatSampleTime(
         basePort.samples[sampleIndex]?.ts,
         basePort.samples.length,
@@ -1915,10 +1930,7 @@ function PowerChart({ history }: { history: PortHistory }) {
       const sample = port.samples[sampleIndex];
       row[port.port === 0 ? "A" : `C${port.port}`] = sample ? samplePower(sample) : 0;
     }
-    const temperatures = history.ports
-      .map((port) => port.samples[sampleIndex]?.temperature_c)
-      .filter((value): value is number => Number.isFinite(value));
-    row.temperature = temperatures.length > 0 ? Math.max(...temperatures) : 0;
+    row.temperature = maxValidTemperature(history.ports.map((port) => port.samples[sampleIndex]?.temperature_c));
 
     return row;
   }) ?? [];
@@ -1953,7 +1965,7 @@ function PowerChart({ history }: { history: PortHistory }) {
           />
           <Tooltip
             contentStyle={{ border: "1px solid #2e2823", borderRadius: 8 }}
-            formatter={(value, name) => name === "temperature" ? `${Number(value).toFixed(0)}C` : `${Number(value).toFixed(1)}W`}
+            formatter={(value, name) => name === "temperature" ? formatTemperatureTooltip(value) : `${Number(value).toFixed(1)}W`}
           />
           {["A", "C1", "C2", "C3", "C4"].map((key, index) => (
             <Area
