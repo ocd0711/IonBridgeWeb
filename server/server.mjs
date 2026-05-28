@@ -1,12 +1,12 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { lookup } from "node:dns/promises";
 import { createReadStream, existsSync } from "node:fs";
 import { mkdir, stat } from "node:fs/promises";
 import { createServer } from "node:http";
-import { isIP } from "node:net";
 import { extname, join, normalize } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
+
+import { createTargetFetcher, normalizeTarget } from "./target-security.mjs";
 
 const rootDir = fileURLToPath(new URL("..", import.meta.url));
 const distDir = join(rootDir, "dist");
@@ -22,11 +22,15 @@ const sessionTtlMs = 7 * 24 * 60 * 60 * 1000;
 const maxLoginFailures = 5;
 const loginFailureWindowMs = 60 * 1000;
 const maxJsonBodyBytes = 64 * 1024;
-const allowedTargetRules = parseAllowedTargetRules(process.env.IONBRIDGE_ALLOWED_TARGETS);
 const allowTargetRedirects = process.env.IONBRIDGE_ALLOW_TARGET_REDIRECTS === "true";
 const maxTargetRedirects = allowTargetRedirects
   ? Math.max(0, Math.min(5, Number(process.env.IONBRIDGE_MAX_TARGET_REDIRECTS ?? 3)))
   : 0;
+const fetchTarget = createTargetFetcher({
+  allowedTargets: process.env.IONBRIDGE_ALLOWED_TARGETS,
+  allowTargetRedirects,
+  maxTargetRedirects,
+});
 const showAppearanceSwitcher = process.env.IONBRIDGE_SHOW_APPEARANCE_SWITCHER === "true";
 const sessions = new Map();
 const loginFailures = new Map();
@@ -42,6 +46,7 @@ let config = {
 };
 const collectorTimers = new Map();
 const collectingTargets = new Set();
+const collectorStats = new Map();
 const liveClients = new Set();
 const latestSnapshots = new Map();
 let lastPruneAt = 0;
@@ -81,6 +86,7 @@ const server = createServer(async (req, res) => {
     }
 
     if (url.pathname === "/api/history") return handleHistory(url, res);
+    if (url.pathname === "/api/status") return sendJson(res, statusPayload());
     if (url.pathname === "/api/live") return handleLive(req, res, url);
     if (url.pathname.startsWith("/device-proxy")) return proxyRequest(req, res, url);
     if (url.pathname.startsWith("/device")) return proxyCurrentTarget(req, res, url);
@@ -131,6 +137,12 @@ async function collectOnce(targetUrl) {
   const normalizedTarget = normalizeTarget(targetUrl);
   if (collectingTargets.has(normalizedTarget)) return;
   collectingTargets.add(normalizedTarget);
+  const startedAt = Date.now();
+  collectorStats.set(normalizedTarget, {
+    ...(collectorStats.get(normalizedTarget) ?? {}),
+    collecting: true,
+    lastStartedAt: startedAt,
+  });
   try {
     const machineInfo = await fetchMachineInfo(normalizedTarget);
     const deviceKey = requireDeviceKey(machineInfo);
@@ -165,9 +177,29 @@ async function collectOnce(targetUrl) {
       config,
     };
     latestSnapshots.set(deviceKey, snapshot);
+    collectorStats.set(normalizedTarget, {
+      collecting: false,
+      lastStartedAt: startedAt,
+      lastFinishedAt: ts,
+      lastSuccessAt: ts,
+      lastErrorAt: null,
+      lastError: null,
+      lastDeviceKey: deviceKey,
+      lastSampleCount: metrics.ports.length,
+    });
     broadcastLive(snapshot);
-  } catch {
+  } catch (error) {
+    const finishedAt = Date.now();
+    const message = error instanceof Error ? error.message : "target unreachable";
     markTargetStatusByTarget(normalizedTarget, "offline", "target unreachable");
+    collectorStats.set(normalizedTarget, {
+      ...(collectorStats.get(normalizedTarget) ?? {}),
+      collecting: false,
+      lastStartedAt: startedAt,
+      lastFinishedAt: finishedAt,
+      lastErrorAt: finishedAt,
+      lastError: message,
+    });
     config = await loadConfig();
     broadcastLive({
       type: "status",
@@ -595,6 +627,33 @@ function queryHistory({ deviceKey, target, start, end, portFilter }) {
   return rows.map((row) => ({ ...row, attached: Boolean(row.attached) }));
 }
 
+function statusPayload() {
+  const sampleCounts = new Map(db.prepare(`
+    SELECT device_key deviceKey, COUNT(*) count, MAX(ts) lastSampleAt
+    FROM samples
+    GROUP BY device_key
+  `).all().map((row) => [row.deviceKey, row]));
+  return {
+    ok: true,
+    retentionDays,
+    liveClients: liveClients.size,
+    collectors: listTargets().map((target) => {
+      const sample = sampleCounts.get(target.deviceKey) ?? {};
+      return {
+        deviceKey: target.deviceKey,
+        targetUrl: target.targetUrl,
+        refreshIntervalMs: target.refreshIntervalMs,
+        status: target.lastStatus,
+        lastError: target.lastError,
+        lastSeen: target.lastSeen,
+        lastSampleAt: sample.lastSampleAt ?? target.lastSampleAt,
+        sampleCount: sample.count ?? 0,
+        collector: collectorStats.get(target.targetUrl) ?? { collecting: false },
+      };
+    }),
+  };
+}
+
 async function handleConfig(req, res) {
   const body = await readJson(req);
   const targetUrl = normalizeTarget(body.targetUrl ?? config.targetUrl);
@@ -822,12 +881,6 @@ function applySecurityHeaders(res) {
   );
 }
 
-function normalizeTarget(target) {
-  const trimmed = String(target || "").trim().replace(/\/+$/, "");
-  if (!trimmed) return "";
-  return /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
-}
-
 function clampInterval(value) {
   return Math.max(1000, Math.min(60000, Math.round(Number.isFinite(value) ? value : defaultIntervalMs)));
 }
@@ -922,123 +975,4 @@ function contentType(ext) {
     ".png": "image/png",
     ".ico": "image/x-icon",
   }[ext] ?? "application/octet-stream";
-}
-
-async function fetchTarget(input, options = {}) {
-  let current = new URL(input);
-  for (let redirectCount = 0; redirectCount <= maxTargetRedirects; redirectCount += 1) {
-    await assertAllowedTargetUrl(current);
-    const response = await fetch(current, { ...options, redirect: "manual" });
-    if (!isRedirectStatus(response.status)) return response;
-    const location = response.headers.get("location");
-    if (!allowTargetRedirects || !location) {
-      throw new Error("target redirect is not allowed");
-    }
-    if (redirectCount === maxTargetRedirects) {
-      throw new Error("too many target redirects");
-    }
-    current = new URL(location, current);
-  }
-  throw new Error("too many target redirects");
-}
-
-async function assertAllowedTargetUrl(input) {
-  const url = new URL(input);
-  if (url.protocol !== "http:") {
-    throw new Error("target protocol is not allowed");
-  }
-  const hostname = normalizeHostname(url.hostname);
-  if (!hostname) throw new Error("target host is required");
-  if (matchesAllowedHostname(hostname)) return;
-
-  const addresses = isIP(hostname)
-    ? [{ address: hostname, family: isIP(hostname) }]
-    : await lookup(hostname, { all: true, verbatim: true });
-  if (addresses.length === 0) throw new Error("target host did not resolve");
-  if (!addresses.every(({ address }) => isAllowedIpAddress(address))) {
-    throw new Error("target address is not allowed");
-  }
-}
-
-function parseAllowedTargetRules(value) {
-  const rawRules = String(value || "192.168.0.0/16,10.0.0.0/8,172.16.0.0/12,*.local")
-    .split(",")
-    .map((rule) => rule.trim().toLowerCase())
-    .filter(Boolean);
-  return rawRules.map((rule) => {
-    if (rule.startsWith("*.")) return { type: "suffix", value: rule.slice(1) };
-    if (rule.includes("/")) {
-      const [network, prefixText] = rule.split("/");
-      const prefix = Number(prefixText);
-      const networkInt = ipv4ToInt(network);
-      if (networkInt == null || !Number.isInteger(prefix) || prefix < 0 || prefix > 32) {
-        throw new Error(`invalid IONBRIDGE_ALLOWED_TARGETS rule: ${rule}`);
-      }
-      return { type: "cidr4", network: networkInt, mask: prefix === 0 ? 0 : (0xffffffff << (32 - prefix)) >>> 0 };
-    }
-    const ipInt = ipv4ToInt(rule);
-    if (ipInt != null) return { type: "cidr4", network: ipInt, mask: 0xffffffff };
-    return { type: "host", value: normalizeHostname(rule) };
-  });
-}
-
-function matchesAllowedHostname(hostname) {
-  if (blockedHostnames().has(hostname)) return false;
-  return allowedTargetRules.some((rule) => {
-    if (rule.type === "host") return hostname === rule.value;
-    if (rule.type === "suffix") return hostname.endsWith(rule.value) && hostname.length > rule.value.length;
-    return false;
-  });
-}
-
-function isAllowedIpAddress(address) {
-  const normalized = normalizeHostname(address);
-  if (blockedHostnames().has(normalized)) return false;
-  const ip4 = ipv4ToInt(normalized);
-  if (ip4 != null) {
-    if (isBlockedIpv4(ip4)) return false;
-    return allowedTargetRules.some((rule) => rule.type === "cidr4" && (ip4 & rule.mask) === (rule.network & rule.mask));
-  }
-  return false;
-}
-
-function normalizeHostname(hostname) {
-  return String(hostname || "").trim().replace(/^\[|\]$/g, "").replace(/\.$/, "").toLowerCase();
-}
-
-function blockedHostnames() {
-  return new Set(["localhost", "0.0.0.0", "::", "::1"]);
-}
-
-function isBlockedIpv4(ip) {
-  return (
-    inIpv4Cidr(ip, "0.0.0.0", 8) ||
-    inIpv4Cidr(ip, "127.0.0.0", 8) ||
-    inIpv4Cidr(ip, "169.254.0.0", 16) ||
-    inIpv4Cidr(ip, "224.0.0.0", 4) ||
-    inIpv4Cidr(ip, "255.255.255.255", 32)
-  );
-}
-
-function inIpv4Cidr(ip, network, prefix) {
-  const networkInt = ipv4ToInt(network);
-  const mask = prefix === 0 ? 0 : (0xffffffff << (32 - prefix)) >>> 0;
-  return networkInt != null && (ip & mask) === (networkInt & mask);
-}
-
-function ipv4ToInt(value) {
-  const parts = String(value).split(".");
-  if (parts.length !== 4) return null;
-  let result = 0;
-  for (const part of parts) {
-    if (!/^\d+$/.test(part)) return null;
-    const number = Number(part);
-    if (number < 0 || number > 255) return null;
-    result = ((result << 8) | number) >>> 0;
-  }
-  return result >>> 0;
-}
-
-function isRedirectStatus(status) {
-  return [301, 302, 303, 307, 308].includes(status);
 }

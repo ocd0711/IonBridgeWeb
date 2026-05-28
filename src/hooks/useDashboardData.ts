@@ -13,6 +13,7 @@ import {
 
 export type DashboardData = Awaited<ReturnType<typeof fetchDashboardData>>;
 export type LiveTransportState = "connecting" | "sse" | "reconnecting" | "fallback";
+export type DeviceStatus = LiveStatusEvent["status"];
 
 export function useDashboardData(
   targetUrl: string,
@@ -25,6 +26,7 @@ export function useDashboardData(
   const [updatedAt, setUpdatedAt] = React.useState<Date | null>(null);
   const [refreshToken, setRefreshToken] = React.useState(0);
   const [transportState, setTransportState] = React.useState<LiveTransportState>("connecting");
+  const [deviceStatus, setDeviceStatus] = React.useState<DeviceStatus>("unknown");
 
   React.useEffect(() => {
     let alive = true;
@@ -35,6 +37,7 @@ export function useDashboardData(
     setData(null);
     setUpdatedAt(null);
     setTransportState("connecting");
+    setDeviceStatus("unknown");
     if (!enabled || !targetUrl.trim()) return;
 
     async function refresh(offlineOnly = false) {
@@ -46,6 +49,7 @@ export function useDashboardData(
         if (!alive || lastSnapshotAt > startedAt) return;
         setData(next);
         setUpdatedAt(new Date());
+        setDeviceStatus(next.source === "device" ? "online" : next.source === "offline" ? "offline" : "unknown");
         if (offlineOnly || !lastSnapshotAt || next.source !== "device") setTransportState("fallback");
       } catch (error) {
         if (isAuthRequiredError(error)) {
@@ -72,6 +76,7 @@ export function useDashboardData(
         if (!alive) return;
         lastSnapshotAt = Date.now();
         setTransportState("sse");
+        setDeviceStatus("online");
         const snapshot = JSON.parse((event as MessageEvent).data) as LiveDashboardSnapshot;
         setData((current) => mergeLiveDashboardData(current, snapshot));
         setUpdatedAt(new Date(snapshot.ts));
@@ -81,6 +86,7 @@ export function useDashboardData(
         if (!alive) return;
         const status = JSON.parse((event as MessageEvent).data) as LiveStatusEvent;
         setTransportState((current) => lastSnapshotAt ? "sse" : current);
+        setDeviceStatus(status.status);
         if (status.config) onConfigUpdate?.(status.config);
         if (status.status === "offline") void refresh(true);
       });
@@ -102,5 +108,5 @@ export function useDashboardData(
     };
   }, [targetUrl, refreshIntervalMs, refreshToken, enabled, onConfigUpdate, onAuthRequired]);
 
-  return { data, transportState, updatedAt, retry: () => setRefreshToken((token) => token + 1) };
+  return { data, deviceStatus, transportState, updatedAt, retry: () => setRefreshToken((token) => token + 1) };
 }

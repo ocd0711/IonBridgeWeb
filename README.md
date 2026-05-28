@@ -53,6 +53,12 @@ npm run dev
 npm run build
 ```
 
+运行测试：
+
+```bash
+npm test
+```
+
 本地预览构建结果：
 
 ```bash
@@ -163,6 +169,14 @@ Docker/生产服务模式下，这个频率会按 PSN 写入 `targets.refresh_in
 生产服务会作为唯一采集器按这个频率请求设备，并通过 `/api/live` SSE 把最新 metrics、heap、Machine Info 和连接状态推送给已打开的页面。前端优先使用 SSE 增量更新实时面板；如果推送断开或长时间没有事件，会自动回退到原有 HTTP 拉取。
 
 如果请求失败，前端会对当前请求做多次递增间隔重试；本轮最终失败后会进入目标地址配置页，避免用 mock 数据误导用户。修改地址或点击重试后会继续尝试连接目标设备。
+
+运行状态接口：
+
+```text
+GET /api/status
+```
+
+这个接口返回当前 SSE client 数量、历史保留天数、每台已保存设备的 collector 状态、最近采样时间和 SQLite 样本数。设置了 `IONBRIDGE_PASSWORD` 时，这个接口同样需要登录。
 
 ## 历史数据
 
