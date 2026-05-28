@@ -27,12 +27,17 @@ import {
   fetchDashboardData,
   fetchServerHistory,
   getServerSession,
+  liveStreamUrl,
   login,
+  mergeLiveDashboardData,
   normalizeDeviceTarget,
   saveServerConfig,
   setActiveServerTarget,
   deleteSavedTarget,
+  type LiveDashboardSnapshot,
+  type LiveStatusEvent,
   type SavedTarget,
+  type ServerSession,
 } from "./api";
 import {
   deviceProfiles,
@@ -61,6 +66,7 @@ const LANGUAGE_STORAGE_KEY = "ionbridge:language:v1";
 const DEFAULT_REFRESH_INTERVAL_MS = 30000;
 type Language = "zh" | "en";
 type TranslationKey = keyof typeof translations.zh;
+type LiveTransportState = "connecting" | "sse" | "reconnecting" | "fallback";
 
 const translations = {
   zh: {
@@ -99,6 +105,7 @@ const translations = {
     ledStrip: "LED 功率条",
     deviceFront: "设备正面",
     sideC4: "侧面 C4 端口",
+    sidePort: "侧边端口",
     attached: "已连接",
     idle: "空闲",
     portLimit: "端口上限",
@@ -188,6 +195,10 @@ const translations = {
     english: "EN",
     deviceSettings: "设备设置",
     connectionSettings: "连接设置",
+    transportConnecting: "推送连接中",
+    transportSse: "SSE 推送",
+    transportReconnecting: "推送重连中",
+    transportFallback: "HTTP 回退",
   },
   en: {
     sourceDevice: "Live",
@@ -315,6 +326,10 @@ const translations = {
     english: "EN",
     deviceSettings: "Device settings",
     connectionSettings: "Connection settings",
+    transportConnecting: "Live connecting",
+    transportSse: "SSE live",
+    transportReconnecting: "Live reconnecting",
+    transportFallback: "HTTP fallback",
   },
 } as const;
 
@@ -385,6 +400,13 @@ function sourceLabel(language: Language, source: DashboardData["source"]) {
   return translate(language, "sourceMock");
 }
 
+function transportLabel(language: Language, state: LiveTransportState) {
+  if (state === "sse") return translate(language, "transportSse");
+  if (state === "reconnecting") return translate(language, "transportReconnecting");
+  if (state === "fallback") return translate(language, "transportFallback");
+  return translate(language, "transportConnecting");
+}
+
 function targetStatusLabel(language: Language, status: SavedTarget["lastStatus"]) {
   if (status === "online") return translate(language, "statusOnline");
   if (status === "offline") return translate(language, "statusOffline");
@@ -428,46 +450,98 @@ function LanguageToggle() {
   );
 }
 
-function useDashboardData(targetUrl: string, refreshIntervalMs: number) {
+function useDashboardData(
+  targetUrl: string,
+  refreshIntervalMs: number,
+  enabled: boolean,
+  onConfigUpdate?: (config: ServerSession["config"]) => void,
+) {
   const [data, setData] = React.useState<DashboardData | null>(null);
   const [updatedAt, setUpdatedAt] = React.useState<Date | null>(null);
   const [refreshToken, setRefreshToken] = React.useState(0);
+  const [transportState, setTransportState] = React.useState<LiveTransportState>("connecting");
 
   React.useEffect(() => {
     let alive = true;
+    let lastLiveAt = 0;
+    let lastSnapshotAt = 0;
+    let eventSource: EventSource | null = null;
+    let initialTimer = 0;
     setData(null);
     setUpdatedAt(null);
-    if (!targetUrl.trim()) return;
+    setTransportState("connecting");
+    if (!enabled || !targetUrl.trim()) return;
 
     async function refresh() {
       const next = await fetchDashboardData(targetUrl);
       if (!alive) return;
       setData(next);
       setUpdatedAt(new Date());
+      if (!lastLiveAt) setTransportState("fallback");
     }
 
-    refresh();
-    const timer = window.setInterval(refresh, refreshIntervalMs);
+    const supportsLiveStream = typeof EventSource !== "undefined";
+    if (supportsLiveStream) {
+      eventSource = new EventSource(liveStreamUrl(targetUrl), { withCredentials: true });
+      eventSource.onopen = () => {
+        if (!alive) return;
+        lastLiveAt = Date.now();
+        setTransportState("sse");
+      };
+      eventSource.onerror = () => {
+        if (!alive) return;
+        setTransportState("reconnecting");
+      };
+      eventSource.addEventListener("snapshot", (event) => {
+        if (!alive) return;
+        lastLiveAt = Date.now();
+        lastSnapshotAt = Date.now();
+        setTransportState("sse");
+        const snapshot = JSON.parse((event as MessageEvent).data) as LiveDashboardSnapshot;
+        setData((current) => mergeLiveDashboardData(current, snapshot));
+        setUpdatedAt(new Date(snapshot.ts));
+        if (snapshot.config) onConfigUpdate?.(snapshot.config);
+      });
+      eventSource.addEventListener("status", (event) => {
+        if (!alive) return;
+        lastLiveAt = Date.now();
+        setTransportState("sse");
+        const status = JSON.parse((event as MessageEvent).data) as LiveStatusEvent;
+        if (status.config) onConfigUpdate?.(status.config);
+      });
+    }
+    initialTimer = window.setTimeout(() => {
+      if (lastLiveAt) return;
+      refresh();
+    }, supportsLiveStream ? Math.min(1500, Math.max(500, refreshIntervalMs / 2)) : 0);
+    const timer = window.setInterval(() => {
+      if (lastLiveAt && Date.now() - lastLiveAt < refreshIntervalMs * 2.5) return;
+      refresh();
+    }, refreshIntervalMs);
 
     return () => {
       alive = false;
+      eventSource?.close();
+      window.clearTimeout(initialTimer);
       window.clearInterval(timer);
     };
-  }, [targetUrl, refreshIntervalMs, refreshToken]);
+  }, [targetUrl, refreshIntervalMs, refreshToken, enabled, onConfigUpdate]);
 
-  return { data, updatedAt, retry: () => setRefreshToken((token) => token + 1) };
+  return { data, transportState, updatedAt, retry: () => setRefreshToken((token) => token + 1) };
 }
 
 function useServerSettings() {
   const [ready, setReady] = React.useState(false);
   const [passwordRequired, setPasswordRequired] = React.useState(false);
+  const [session, setSession] = React.useState<ServerSession | null>(null);
 
   React.useEffect(() => {
     let alive = true;
-    getServerSession().then((session) => {
+    getServerSession().then((nextSession) => {
       if (!alive) return;
-      if (session) {
-        setPasswordRequired(session.passwordEnabled && !session.authenticated);
+      setSession(nextSession);
+      if (nextSession) {
+        setPasswordRequired(nextSession.passwordEnabled && !nextSession.authenticated);
       }
       setReady(true);
     });
@@ -476,13 +550,14 @@ function useServerSettings() {
     };
   }, []);
 
-  return { ready, passwordRequired, setPasswordRequired };
+  return { ready, passwordRequired, serverSession: session, setPasswordRequired, setServerSession: setSession };
 }
 
 function Header({
   metrics,
   profile,
   source,
+  transportState,
   updatedAt,
   targetUrl,
   refreshIntervalMs,
@@ -495,6 +570,7 @@ function Header({
   metrics: Metrics;
   profile: DeviceVisualProfile;
   source: DashboardData["source"];
+  transportState: LiveTransportState;
   updatedAt: Date | null;
   targetUrl: string;
   refreshIntervalMs: number;
@@ -541,6 +617,7 @@ function Header({
           <div className={`live-chip ${source}`}>
             <span />
             {sourceLabel(language, source)}
+            <small>{transportLabel(language, transportState)}</small>
             {updatedAt ? ` ${updatedAt.toLocaleTimeString("zh-CN", { hour12: false })}` : ""}
           </div>
           <SavedTargetsMenu
@@ -742,7 +819,7 @@ function DeviceTargetControl({
   );
 }
 
-function LoginScreen({ onLogin }: { onLogin: () => void }) {
+function LoginScreen({ onLogin }: { onLogin: (session: ServerSession) => void }) {
   const { t } = useI18n();
   const [password, setPassword] = React.useState("");
   const [error, setError] = React.useState("");
@@ -756,8 +833,8 @@ function LoginScreen({ onLogin }: { onLogin: () => void }) {
             event.preventDefault();
             setError("");
             try {
-              await login(password);
-              onLogin();
+              const session = await login(password);
+              onLogin(session);
             } catch {
               setError(t("passwordWrong"));
             }
@@ -1549,10 +1626,12 @@ function ProfileSwitcher({
 
 function LongHistoryPanel({
   targetUrl,
+  metrics,
   ports,
   updatedAt,
 }: {
   targetUrl: string;
+  metrics: Metrics;
   ports: PortMetrics[];
   updatedAt: Date | null;
 }) {
@@ -1603,7 +1682,36 @@ function LongHistoryPanel({
     return () => {
       alive = false;
     };
-  }, [targetUrl, hours, rangeMode, customStart, customEnd, portFilter, updatedAt?.getTime(), canQuery, start, end]);
+  }, [targetUrl, hours, rangeMode, customStart, customEnd, portFilter, canQuery, start, end]);
+
+  React.useEffect(() => {
+    if (!updatedAt || !canQuery) return;
+    const ts = updatedAt.getTime();
+    const rangeStart = rangeMode === "custom" ? start : Date.now() - hours * 60 * 60 * 1000;
+    const rangeEnd = rangeMode === "custom" ? end : Date.now() + 1000;
+    if (rangeStart == null || rangeEnd == null || ts < rangeStart || ts > rangeEnd) return;
+    const nextLiveRows = metrics.ports
+      .filter((port) => portFilter == null || port.id === portFilter)
+      .map((port) => ({
+        ts,
+        target: targetUrl,
+        port: port.id,
+        voltage: port.voltage,
+        current: port.current,
+        temperature_c: port.die_temperature,
+        power_w: watts(port),
+        attached: port.attached,
+        protocol: String(port.fc_protocol),
+      }));
+    setRows((currentRows) => {
+      const merged = [...currentRows.filter((row) => row.ts >= rangeStart && row.ts <= rangeEnd), ...nextLiveRows];
+      const bySample = new Map<string, ServerHistoryRow>();
+      for (const row of merged) bySample.set(`${row.ts}:${row.port}`, row);
+      return Array.from(bySample.values()).sort((a, b) => a.ts - b.ts || a.port - b.port);
+    });
+    setLoadedAt(new Date());
+    setStatus((currentStatus) => currentStatus === "unavailable" ? currentStatus : "ready");
+  }, [targetUrl, metrics, hours, rangeMode, portFilter, updatedAt, canQuery, start, end]);
 
   const chartRows = React.useMemo(() => buildServerHistoryChartRows(rows), [rows]);
   const powerValues = chartRows.map((row) => row.power);
@@ -1959,11 +2067,20 @@ function App() {
   const [targetUrl, setTargetUrl] = React.useState(readDeviceTarget);
   const [refreshIntervalMs, setRefreshIntervalMs] = React.useState(readRefreshInterval);
   const [savedTargets, setSavedTargets] = React.useState<SavedTarget[]>([]);
-  const { ready, passwordRequired, setPasswordRequired } = useServerSettings();
-  const { data, updatedAt, retry } = useDashboardData(targetUrl, refreshIntervalMs);
+  const { ready, passwordRequired, serverSession, setPasswordRequired, setServerSession } = useServerSettings();
   const [activeProfileKey, setActiveProfileKey] = React.useState<string | null>(null);
   const [connectionActionPending, setConnectionActionPending] = React.useState(false);
   const connectionActionPendingRef = React.useRef(false);
+  const handleLiveConfigUpdate = React.useCallback((nextConfig: ServerSession["config"]) => {
+    setSavedTargets(nextConfig.targets);
+  }, []);
+  const liveEnabled = ready && !passwordRequired;
+  const { data, transportState, updatedAt, retry } = useDashboardData(
+    targetUrl,
+    refreshIntervalMs,
+    liveEnabled,
+    handleLiveConfigUpdate,
+  );
   const i18n = React.useMemo(() => ({
     language,
     setLanguage: (nextLanguage: Language) => {
@@ -2036,30 +2153,20 @@ function App() {
   }
 
   React.useEffect(() => {
-    getServerSession().then((session) => {
-      if (!session || !session.authenticated) return;
-      const serverInterval = clampRefreshInterval(session.config.refreshIntervalMs);
-      setSavedTargets(session.config.targets);
-      setRefreshIntervalMs(serverInterval);
-      writeRefreshInterval(serverInterval);
-      if (session.config.targetUrl) {
-        const serverTarget = normalizeDeviceTarget(session.config.targetUrl);
-        setTargetUrl(serverTarget);
-        writeDeviceTarget(serverTarget);
-      } else {
-        setTargetUrl("");
-        writeDeviceTarget("");
-      }
-    });
-  }, [passwordRequired]);
-
-  React.useEffect(() => {
-    if (passwordRequired) return;
-    getServerSession().then((session) => {
-      if (!session || !session.authenticated) return;
-      setSavedTargets(session.config.targets);
-    });
-  }, [updatedAt, passwordRequired]);
+    if (!serverSession || !serverSession.authenticated) return;
+    const serverInterval = clampRefreshInterval(serverSession.config.refreshIntervalMs);
+    setSavedTargets(serverSession.config.targets);
+    setRefreshIntervalMs(serverInterval);
+    writeRefreshInterval(serverInterval);
+    if (serverSession.config.targetUrl) {
+      const serverTarget = normalizeDeviceTarget(serverSession.config.targetUrl);
+      setTargetUrl(serverTarget);
+      writeDeviceTarget(serverTarget);
+    } else {
+      setTargetUrl("");
+      writeDeviceTarget("");
+    }
+  }, [serverSession]);
 
   if (!ready) {
     return (
@@ -2072,7 +2179,12 @@ function App() {
   if (passwordRequired) {
     return (
       <I18nContext.Provider value={i18n}>
-        <LoginScreen onLogin={() => setPasswordRequired(false)} />
+        <LoginScreen
+          onLogin={(session) => {
+            setServerSession(session);
+            setPasswordRequired(false);
+          }}
+        />
       </I18nContext.Provider>
     );
   }
@@ -2123,6 +2235,7 @@ function App() {
           metrics={metrics}
           profile={activeProfile}
           source={source}
+          transportState={transportState}
           targetUrl={targetUrl}
           refreshIntervalMs={refreshIntervalMs}
           savedTargets={savedTargets}
@@ -2148,7 +2261,7 @@ function App() {
           <PowerChart history={history} />
           <RuntimePanel metrics={metrics} heap={heap} />
         </section>
-        <LongHistoryPanel targetUrl={targetUrl} ports={metrics.ports} updatedAt={updatedAt} />
+        <LongHistoryPanel targetUrl={targetUrl} metrics={metrics} ports={metrics.ports} updatedAt={updatedAt} />
         <DiagnosticsDeck heap={heap} history={history} machineInfo={machineInfo} metrics={metrics} />
       </main>
     </I18nContext.Provider>

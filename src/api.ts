@@ -59,6 +59,26 @@ export type ServerHistoryRow = {
   protocol: string;
 };
 
+export type LiveDashboardSnapshot = {
+  type: "snapshot";
+  deviceKey: string;
+  targetUrl: string;
+  ts: number;
+  metrics: Metrics;
+  heap: HeapMetrics | null;
+  machineInfo: MachineInfo;
+  config?: ServerSession["config"];
+};
+
+export type LiveStatusEvent = {
+  type: "status";
+  targetUrl: string;
+  status: "offline" | "online" | "unknown";
+  error?: string;
+  ts: number;
+  config?: ServerSession["config"];
+};
+
 export async function getServerSession(): Promise<ServerSession | null> {
   try {
     const response = await fetch("/api/session", { cache: "no-store" });
@@ -262,6 +282,26 @@ export async function fetchDashboardData(targetUrl = DEFAULT_DEVICE_TARGET): Pro
   }
 }
 
+export function liveStreamUrl(targetUrl: string) {
+  const params = new URLSearchParams({ target: normalizeDeviceTarget(targetUrl) });
+  return `/api/live?${params.toString()}`;
+}
+
+export function mergeLiveDashboardData(
+  current: Awaited<ReturnType<typeof fetchDashboardData>> | null,
+  snapshot: LiveDashboardSnapshot,
+): Awaited<ReturnType<typeof fetchDashboardData>> {
+  writeCachedMachineInfo(snapshot.targetUrl, snapshot.machineInfo);
+  const baseHistory = current?.history ?? liveOnlyHistory(snapshot.metrics);
+  return {
+    metrics: snapshot.metrics,
+    history: mergeHistory(baseHistory, snapshot.metrics, snapshot.targetUrl, snapshot.ts),
+    heap: snapshot.heap ?? current?.heap ?? mockHeap,
+    machineInfo: snapshot.machineInfo,
+    source: "device",
+  };
+}
+
 function offlineMetricsFromHistory(rows: ServerHistoryRow[]): Metrics {
   const latestTs = Math.max(...rows.map((row) => row.ts));
   const latestRows = rows.filter((row) => row.ts === latestTs);
@@ -308,12 +348,12 @@ function historyFromServerRows(rows: ServerHistoryRow[]): PortHistory {
   };
 }
 
-function liveOnlyHistory(metrics: Metrics): PortHistory {
+function liveOnlyHistory(metrics: Metrics, ts = Date.now()): PortHistory {
   return {
     sample_period_ms: 10000,
     ports: metrics.ports.map((port) => ({
       port: port.id,
-      samples: [{ voltage: port.voltage, current: port.current, temperature_c: port.die_temperature, ts: Date.now() }],
+      samples: [{ voltage: port.voltage, current: port.current, temperature_c: port.die_temperature, ts }],
     })),
   };
 }
@@ -359,8 +399,7 @@ function writeCachedMachineInfo(targetUrl: string, machineInfo: MachineInfo) {
   }
 }
 
-function mergeHistory(seed: PortHistory, metrics: Metrics, targetUrl: string): PortHistory {
-  const now = Date.now();
+function mergeHistory(seed: PortHistory, metrics: Metrics, targetUrl: string, now = Date.now()): PortHistory {
   const period = seed.sample_period_ms > 0 ? seed.sample_period_ms : 10000;
   const stored = readStoredHistory(targetUrl);
   const byPort = new Map<number, Array<{ voltage: number; current: number; temperature_c?: number; ts: number }>>();
