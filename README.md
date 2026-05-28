@@ -4,27 +4,37 @@
 
 ## 界面预览
 
-截图来自本地生产服务 `http://127.0.0.1:18318/#ports`，展示连接真实 CP02s 设备后的监控界面。
+截图来自本地 cp02s 设备, 作为参考
 
 ### 登录页
 
-![登录页](./screenshots/login.png)
+| 普通模式 | 深色模式 |
+| --- | --- |
+| ![登录页普通模式](./screenshots/login-light.png) | ![登录页深色模式](./screenshots/login-dark.png) |
 
 ### 监控总览
 
-![监控总览](./screenshots/overview.png)
+| 普通模式 | 深色模式 |
+| --- | --- |
+| ![监控总览普通模式](./screenshots/overview-light.png) | ![监控总览深色模式](./screenshots/overview-dark.png) |
 
 ### 端口数据与历史
 
-![端口数据与历史](./screenshots/ports.png)
+| 普通模式 | 深色模式 |
+| --- | --- |
+| ![端口数据与历史普通模式](./screenshots/ports-light.png) | ![端口数据与历史深色模式](./screenshots/ports-dark.png) |
 
 ### 长时间历史与筛选
 
-![长时间历史与筛选](./screenshots/history.png)
+| 普通模式 | 深色模式 |
+| --- | --- |
+| ![长时间历史与筛选普通模式](./screenshots/history-light.png) | ![长时间历史与筛选深色模式](./screenshots/history-dark.png) |
 
 ### 移动端端口视图
 
-![移动端端口视图](./screenshots/mobile-ports.png)
+| 普通模式 | 深色模式 |
+| --- | --- |
+| ![移动端端口视图普通模式](./screenshots/mobile-ports-light.png) | ![移动端端口视图深色模式](./screenshots/mobile-ports-dark.png) |
 
 ## 启动
 

@@ -1241,7 +1241,7 @@ function LongHistoryPanel({
   const maxTemp = chartRows.length > 0 ? Math.max(...chartRows.map((row) => row.temperature)) : 0;
 
   return (
-    <section className="panel long-history-panel">
+    <section className="panel long-history-panel" id="history">
       <div className="panel-header long-history-head">
         <div>
           <p>Server history</p>
