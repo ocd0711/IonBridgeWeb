@@ -14,4 +14,7 @@ services:
       # 设置后启用登录保护。
       # IONBRIDGE_PASSWORD: "change-me"
     volumes:
-      - ./data:/data
+      - ionbridge-data:/data
+
+volumes:
+  ionbridge-data:

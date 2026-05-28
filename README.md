@@ -92,7 +92,10 @@ environment:
   IONBRIDGE_MAX_TARGET_REDIRECTS: "0"
   IONBRIDGE_PASSWORD: "change-me"
 volumes:
-  - ./data:/data
+  - ionbridge-data:/data
+
+volumes:
+  ionbridge-data:
 ```
 
 - `IONBRIDGE_RETENTION_DAYS`: 服务端历史保留天数，默认 30 天。
@@ -100,7 +103,7 @@ volumes:
 - `IONBRIDGE_ALLOW_TARGET_REDIRECTS`: 是否允许目标设备请求跟随 HTTP redirect，默认 `false`。
 - `IONBRIDGE_MAX_TARGET_REDIRECTS`: 允许 redirect 时的最大跳转次数，默认 `0`，最大 `5`。
 - `IONBRIDGE_PASSWORD`: 设置后启用登录保护；不设置则不要求登录。
-- `/data`: 持久化配置和历史数据。
+- `/data`: 持久化配置和历史数据。推荐使用 Docker named volume，避免非 root 容器用户写入宿主机 bind mount 时遇到 SQLite 只读错误。
 
 建议在 Docker 或任何局域网可访问部署中设置 `IONBRIDGE_PASSWORD`。不设置密码时，任何能访问服务端口的设备都可以查看面板、切换设备和删除历史数据。
 
@@ -110,6 +113,14 @@ volumes:
 
 ```text
 /data/ionbridge.db
+```
+
+如果你改回 `./data:/data` 这种 bind mount，需要确保宿主机目录和数据库文件对容器运行用户可写。当前镜像使用非 root 用户运行，权限不对时会报 `attempt to write a readonly database`。迁移已有 bind mount 时可以先停容器，再执行类似命令修正权限：
+
+```bash
+docker compose down
+sudo chown -R 1000:1000 ./data
+docker compose up -d
 ```
 
 历史数据写入 SQLite。PSN 是唯一设备标识；IP 或 mDNS 只作为当前连接地址保存，不会作为设备键。服务启动时会按当前 `IONBRIDGE_RETENTION_DAYS` 立即清理超出保留期的数据，之后后台也会周期清理。
