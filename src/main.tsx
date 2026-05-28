@@ -9,6 +9,7 @@ import {
   HardDrive,
   Radio,
   RefreshCw,
+  Settings,
   Zap,
 } from "lucide-react";
 import {
@@ -56,7 +57,266 @@ import "./styles.css";
 type DashboardData = Awaited<ReturnType<typeof fetchDashboardData>>;
 const DEVICE_TARGET_STORAGE_KEY = "ionbridge:device-target:v1";
 const REFRESH_INTERVAL_STORAGE_KEY = "ionbridge:refresh-interval:v1";
+const LANGUAGE_STORAGE_KEY = "ionbridge:language:v1";
 const DEFAULT_REFRESH_INTERVAL_MS = 30000;
+type Language = "zh" | "en";
+type TranslationKey = keyof typeof translations.zh;
+
+const translations = {
+  zh: {
+    sourceDevice: "实时",
+    sourceOffline: "离线",
+    sourceMock: "模拟",
+    statusOnline: "在线",
+    statusOffline: "离线",
+    statusUnknown: "未知",
+    cp02Title: "小电拼 CP-02 监控面板",
+    mirrorTitle: "小电拼 Mirror 监控面板",
+    amberSubhead: "琥珀状态屏 ingBar 的全端遥测视图",
+    ledSubhead: "LED 功率条的全端遥测视图",
+    realtimeSummary: "实时摘要",
+    savedTargets: "已保存设备地址",
+    removeTargetTitle: "移除设备和对应历史数据",
+    targetAddress: "设备目标地址",
+    targetPlaceholder: "当前设备地址",
+    intervalSeconds: "采集间隔，单位秒",
+    validatingDevice: "正在验证设备...",
+    saveConfig: "保存配置",
+    connectFailed: "连接失败，未保存设备",
+    loginTitle: "登录监控面板",
+    loginPassword: "登录密码",
+    passwordPlaceholder: "密码",
+    loginButton: "登录",
+    passwordWrong: "密码不正确",
+    productImage: "小电拼产品图",
+    connecting: "连接中",
+    targetOffline: "设备离线",
+    connectingTitle: "正在连接设备",
+    offlineTitle: "无法连接设备",
+    connectingHelp: "正在验证设备地址和 PSN。你可以直接修改地址并保存。",
+    offlineHelp: "请确认设备 IP 或 mDNS 地址，保存后面板会重新拉取 metrics、历史和设备信息。",
+    amberScreen: "琥珀状态屏",
+    ledStrip: "LED 功率条",
+    deviceFront: "设备正面",
+    sideC4: "侧面 C4 端口",
+    attached: "已连接",
+    idle: "空闲",
+    portLimit: "端口上限",
+    totalPower: "实时功率",
+    modelMax: "型号上限",
+    thermalPeak: "最高温度",
+    thermalDetail: "端口 die temperature 最高值",
+    heapUsed: "内存占用",
+    available: "可用",
+    runtime: "运行时间",
+    diagnostics: "IonBridge 诊断",
+    diagnosticsTitle: "设备资料与端口历史",
+    diagnosticsAria: "诊断资料",
+    diagnosticsTabs: "诊断视图",
+    tabDevice: "设备",
+    tabHeap: "内存",
+    tabPorts: "端口",
+    machineInfo: "设备信息",
+    deviceModel: "设备型号",
+    deviceName: "设备名称",
+    productFamily: "产品系列",
+    productColor: "产品颜色",
+    hwRev: "硬件版本",
+    country: "国家/地区",
+    heapStatus: "内存状态",
+    heapUsedShort: "已用",
+    heapFree: "可用内存",
+    heapAllocated: "已分配内存",
+    heapLargestFree: "最大可用块",
+    heapMinFree: "历史最低可用",
+    heapAllocatedBlocks: "已分配块",
+    heapFreeBlocks: "空闲块",
+    heapTotalBlocks: "总块数",
+    perPortHistory: "每个端口数据与历史",
+    powerTrend: "功率趋势",
+    selected: "已选择",
+    sideSuffix: "侧边",
+    min: "最低",
+    avg: "平均",
+    max: "峰值",
+    state: "状态",
+    protocol: "协议",
+    voltage: "电压",
+    current: "电流",
+    power: "功率",
+    session: "本次时长",
+    sessionCharge: "本次电量",
+    portTemp: "端口温度",
+    sessionId: "会话 ID",
+    pdStatus: "PD 状态",
+    pdAvailable: "可用",
+    noPdData: "无 PD 数据",
+    collapsed: "端口详情已收起",
+    collapsedHint: "点击任意端口展开电压、电流、协议、会话电量和 60 分钟功率曲线。",
+    local60m: "本地 60 分钟滚动缓存",
+    deviceMinutesPrefix: "设备",
+    deviceMinutesSuffix: "分钟 + 本地补样",
+    waitingSamples: "等待历史样本",
+    profileSwitchAria: "外观主题切换",
+    appearancePreview: "外观预览",
+    appearanceProfile: "外观主题",
+    detected: "已识别",
+    serverHistory: "服务端历史",
+    longHistory: "长时间历史与筛选",
+    autoRefreshPrefix: "自动跟随 metrics 刷新",
+    historyFilters: "历史筛选",
+    preset: "预设",
+    custom: "自定义",
+    from: "开始",
+    to: "结束",
+    allPorts: "全部端口",
+    samples: "样本",
+    highestTemp: "最高温",
+    readingHistory: "正在读取服务端历史...",
+    invalidRange: "自定义时间范围无效",
+    emptyHistory: "当前筛选范围还没有历史样本",
+    unavailableHistory: "当前运行模式没有可用的服务端历史",
+    sqliteHint: "生产服务会持续写入 SQLite，开发模式下仍可使用设备 60 分钟历史。",
+    portTimeline: "端口时间线",
+    livePowerAndTemp: "实时功率与温度",
+    taskLoad: "任务负载",
+    systemStatus: "系统状态",
+    loading: "ingBar 正在启动...",
+    portTelemetry: "端口遥测",
+    language: "语言",
+    chinese: "中",
+    english: "EN",
+    deviceSettings: "设备设置",
+    connectionSettings: "连接设置",
+  },
+  en: {
+    sourceDevice: "Live",
+    sourceOffline: "Offline",
+    sourceMock: "Mock",
+    statusOnline: "Online",
+    statusOffline: "Offline",
+    statusUnknown: "Unknown",
+    cp02Title: "CoCan CP-02 Monitor",
+    mirrorTitle: "CoCan Mirror Monitor",
+    amberSubhead: "Full-stack telemetry for the amber ingBar status display",
+    ledSubhead: "Full-stack telemetry for the LED power strip",
+    realtimeSummary: "Realtime summary",
+    savedTargets: "Saved device targets",
+    removeTargetTitle: "Remove this device and its history",
+    targetAddress: "Device target address",
+    targetPlaceholder: "Current device address",
+    intervalSeconds: "Collection interval in seconds",
+    validatingDevice: "Verifying device...",
+    saveConfig: "Save config",
+    connectFailed: "Connection failed. Device was not saved.",
+    loginTitle: "Sign in to monitor",
+    loginPassword: "Login password",
+    passwordPlaceholder: "Password",
+    loginButton: "Sign in",
+    passwordWrong: "Incorrect password",
+    productImage: "CoCan product image",
+    connecting: "Connecting",
+    targetOffline: "Device offline",
+    connectingTitle: "Connecting to device",
+    offlineTitle: "Unable to reach device",
+    connectingHelp: "Verifying the device address and PSN. You can edit the address and save it directly.",
+    offlineHelp: "Check the device IP or mDNS address. After saving, the panel will reload metrics, history, and device info.",
+    amberScreen: "Amber status display",
+    ledStrip: "LED power strip",
+    deviceFront: "Device front face",
+    sideC4: "Side C4 port",
+    sidePort: "Side port",
+    attached: "Attached",
+    idle: "Idle",
+    portLimit: "Port limit",
+    totalPower: "Realtime power",
+    modelMax: "model max",
+    thermalPeak: "Thermal peak",
+    thermalDetail: "highest port die temperature",
+    heapUsed: "Heap used",
+    available: "free",
+    runtime: "Runtime",
+    diagnostics: "IonBridge diagnostics",
+    diagnosticsTitle: "Device info and port history",
+    diagnosticsAria: "Diagnostics",
+    diagnosticsTabs: "Diagnostic views",
+    tabDevice: "Device",
+    tabHeap: "Heap",
+    tabPorts: "Ports",
+    machineInfo: "Machine Info",
+    deviceModel: "Device Model",
+    deviceName: "Device Name",
+    productFamily: "Product Family",
+    productColor: "Product Color",
+    hwRev: "HW Rev",
+    country: "Country",
+    heapStatus: "Heap status",
+    heapUsedShort: "used",
+    heapFree: "Total Free",
+    heapAllocated: "Total Allocated",
+    heapLargestFree: "Largest Free Block",
+    heapMinFree: "Min Free Ever",
+    heapAllocatedBlocks: "Allocated Blocks",
+    heapFreeBlocks: "Free Blocks",
+    heapTotalBlocks: "Total Blocks",
+    perPortHistory: "Per-port data and history",
+    powerTrend: "Power trend",
+    selected: "Selected",
+    sideSuffix: "Side",
+    min: "Min",
+    avg: "Avg",
+    max: "Max",
+    state: "State",
+    protocol: "Protocol",
+    voltage: "Voltage",
+    current: "Current",
+    power: "Power",
+    session: "Session",
+    sessionCharge: "Session charge",
+    portTemp: "Port temp",
+    sessionId: "Session ID",
+    pdStatus: "PD Status",
+    pdAvailable: "Available",
+    noPdData: "No PD data",
+    collapsed: "Port details collapsed",
+    collapsedHint: "Click any port to expand voltage, current, protocol, session charge, and the 60-minute power chart.",
+    local60m: "Local 60m rolling buffer",
+    deviceMinutesPrefix: "Device",
+    deviceMinutesSuffix: "m + local fill",
+    waitingSamples: "Waiting for samples",
+    profileSwitchAria: "Appearance profile switcher",
+    appearancePreview: "Appearance preview",
+    appearanceProfile: "Appearance profile",
+    detected: "Detected",
+    serverHistory: "Server history",
+    longHistory: "Long history and filters",
+    autoRefreshPrefix: "Auto-refreshes with metrics",
+    historyFilters: "History filters",
+    preset: "Preset",
+    custom: "Custom",
+    from: "From",
+    to: "To",
+    allPorts: "All ports",
+    samples: "Samples",
+    highestTemp: "Temp",
+    readingHistory: "Reading server history...",
+    invalidRange: "Invalid custom time range",
+    emptyHistory: "No samples in the current filter range",
+    unavailableHistory: "Server history is unavailable in the current runtime mode",
+    sqliteHint: "Production service continuously writes SQLite. Development mode still uses the device 60-minute history.",
+    portTimeline: "Port timeline",
+    livePowerAndTemp: "Realtime power and temperature",
+    taskLoad: "Task load",
+    systemStatus: "System status",
+    loading: "ingBar warming up...",
+    portTelemetry: "Port telemetry",
+    language: "Language",
+    chinese: "中",
+    english: "EN",
+    deviceSettings: "Device settings",
+    connectionSettings: "Connection settings",
+  },
+} as const;
 
 function readDeviceTarget() {
   try {
@@ -95,8 +355,77 @@ function writeRefreshInterval(intervalMs: number) {
   }
 }
 
+function readLanguage(): Language {
+  try {
+    return localStorage.getItem(LANGUAGE_STORAGE_KEY) === "en" ? "en" : "zh";
+  } catch {
+    return "zh";
+  }
+}
+
+function writeLanguage(language: Language) {
+  try {
+    localStorage.setItem(LANGUAGE_STORAGE_KEY, language);
+  } catch {
+    // Non-critical. The current session still uses the selected language.
+  }
+}
+
 function clampRefreshInterval(intervalMs: number) {
   return Math.max(1000, Math.min(60000, Math.round(intervalMs)));
+}
+
+function translate(language: Language, key: TranslationKey) {
+  return translations[language][key];
+}
+
+function sourceLabel(language: Language, source: DashboardData["source"]) {
+  if (source === "device") return translate(language, "sourceDevice");
+  if (source === "offline") return translate(language, "sourceOffline");
+  return translate(language, "sourceMock");
+}
+
+function targetStatusLabel(language: Language, status: SavedTarget["lastStatus"]) {
+  if (status === "online") return translate(language, "statusOnline");
+  if (status === "offline") return translate(language, "statusOffline");
+  return translate(language, "statusUnknown");
+}
+
+const I18nContext = React.createContext<{
+  language: Language;
+  setLanguage: (language: Language) => void;
+  t: (key: TranslationKey) => string;
+}>({
+  language: "zh",
+  setLanguage: () => undefined,
+  t: (key) => translations.zh[key],
+});
+
+function useI18n() {
+  return React.useContext(I18nContext);
+}
+
+function LanguageToggle() {
+  const { language, setLanguage, t } = useI18n();
+
+  return (
+    <div className="language-toggle" aria-label={t("language")} role="group">
+      <button
+        className={language === "zh" ? "active" : ""}
+        onClick={() => setLanguage("zh")}
+        type="button"
+      >
+        {t("chinese")}
+      </button>
+      <button
+        className={language === "en" ? "active" : ""}
+        onClick={() => setLanguage("en")}
+        type="button"
+      >
+        {t("english")}
+      </button>
+    </div>
+  );
 }
 
 function useDashboardData(targetUrl: string, refreshIntervalMs: number) {
@@ -175,58 +504,81 @@ function Header({
   onDeleteTarget: (targetUrl: string) => void | Promise<void>;
   connectionActionPending?: boolean;
 }) {
+  const { language, t } = useI18n();
+  const [settingsOpen, setSettingsOpen] = React.useState(false);
   const totalPower = metrics.ports.reduce((sum, port) => sum + watts(port), 0);
   const hottest = Math.max(...metrics.ports.map((port) => port.die_temperature));
   const productTitle = profile.family === "CP02"
-    ? "小电拼 CP-02 监控面板"
-    : "小电拼 Mirror 监控面板";
+    ? t("cp02Title")
+    : t("mirrorTitle");
   const productEyebrow = profile.family === "CP02"
     ? `CP-02 ${profile.variant.toUpperCase()}`
     : `${profile.family} Mirror ${profile.variant.toUpperCase()}`;
 
   return (
-    <header className="app-header">
-      <div>
-        <p className="eyebrow">{productEyebrow}</p>
-        <h1>{productTitle}</h1>
-        <p className="subhead">
-          {profile.displayKind === "amber" ? "琥珀状态屏 ingBar" : "LED 功率条"} 的全端遥测视图
-        </p>
-      </div>
-      <div className="header-metrics" aria-label="实时摘要">
-        <div className="metric-pill">
-          <Zap size={17} />
-          <span>{totalPower.toFixed(1)}W</span>
+    <>
+      <header className="app-header">
+        <div>
+          <p className="eyebrow">{productEyebrow}</p>
+          <h1>{productTitle}</h1>
+          <p className="subhead">
+            {profile.displayKind === "amber" ? t("amberSubhead") : t("ledSubhead")}
+          </p>
         </div>
-        <div className={`metric-pill temp-${temperatureLevel(hottest)}`}>
-          <Gauge size={17} />
-          <span>{hottest}C</span>
+        <div className="header-metrics" aria-label={t("realtimeSummary")}>
+          <div className="metric-pill">
+            <Zap size={17} />
+            <span>{totalPower.toFixed(1)}W</span>
+          </div>
+          <div className={`metric-pill temp-${temperatureLevel(hottest)}`}>
+            <Gauge size={17} />
+            <span>{hottest}C</span>
+          </div>
+          <div className="metric-pill">
+            <Radio size={17} />
+            <span>{metrics.wifi.rssi}dBm</span>
+          </div>
+          <div className={`live-chip ${source}`}>
+            <span />
+            {sourceLabel(language, source)}
+            {updatedAt ? ` ${updatedAt.toLocaleTimeString("zh-CN", { hour12: false })}` : ""}
+          </div>
+          <SavedTargetsMenu
+            activeTargetUrl={targetUrl}
+            disabled={connectionActionPending}
+            targets={savedTargets}
+            onSelect={onSelectSavedTarget}
+            onDelete={onDeleteTarget}
+          />
+          <LanguageToggle />
+          <button
+            aria-expanded={settingsOpen}
+            aria-label={t("deviceSettings")}
+            className={`header-action ${settingsOpen ? "active" : ""}`}
+            onClick={() => setSettingsOpen((open) => !open)}
+            title={t("deviceSettings")}
+            type="button"
+          >
+            <Settings size={17} />
+          </button>
         </div>
-        <div className="metric-pill">
-          <Radio size={17} />
-          <span>{metrics.wifi.rssi}dBm</span>
-        </div>
-        <div className={`live-chip ${source}`}>
-          <span />
-          {source === "device" ? "Live" : source === "offline" ? "Offline" : "Mock"}
-          {updatedAt ? ` ${updatedAt.toLocaleTimeString("zh-CN", { hour12: false })}` : ""}
-        </div>
-        <SavedTargetsMenu
-          activeTargetUrl={targetUrl}
-          disabled={connectionActionPending}
-          targets={savedTargets}
-          onSelect={onSelectSavedTarget}
-          onDelete={onDeleteTarget}
-        />
-        <DeviceTargetControl
-          disabled={connectionActionPending}
-          busy={connectionActionPending}
-          refreshIntervalMs={refreshIntervalMs}
-          targetUrl={targetUrl}
-          onApply={onApply}
-        />
-      </div>
-    </header>
+      </header>
+      {settingsOpen ? (
+        <section className="device-settings-panel" aria-label={t("deviceSettings")}>
+          <div>
+            <p className="eyebrow">{t("connectionSettings")}</p>
+            <h2>{t("deviceSettings")}</h2>
+          </div>
+          <DeviceTargetControl
+            disabled={connectionActionPending}
+            busy={connectionActionPending}
+            refreshIntervalMs={refreshIntervalMs}
+            targetUrl={targetUrl}
+            onApply={onApply}
+          />
+        </section>
+      ) : null}
+    </>
   );
 }
 
@@ -243,6 +595,7 @@ function SavedTargetsMenu({
   onSelect: (target: SavedTarget) => void | Promise<void>;
   onDelete: (targetUrl: string) => void | Promise<void>;
 }) {
+  const { language, t } = useI18n();
   const [isDeleting, setIsDeleting] = React.useState("");
   const [isOpen, setIsOpen] = React.useState(false);
   if (targets.length === 0) return null;
@@ -261,12 +614,12 @@ function SavedTargetsMenu({
       >
         <span className={`saved-target-dot ${activeTarget.lastStatus}`} />
         <strong>{activeName}</strong>
-        <em>{activeTarget.lastStatus}</em>
+        <em>{targetStatusLabel(language, activeTarget.lastStatus)}</em>
         <b>{targets.length}</b>
         <i aria-hidden="true">⌄</i>
       </button>
       {isOpen ? (
-        <div className="saved-target-menu" aria-label="已保存设备地址">
+        <div className="saved-target-menu" aria-label={t("savedTargets")}>
           {targets.map((target) => {
             const isActive = normalizedActive === target.targetUrl;
             const name = target.deviceKey ?? target.targetUrl.replace(/^https?:\/\//, "");
@@ -288,7 +641,7 @@ function SavedTargetsMenu({
                     <strong>{name}</strong>
                     <small>{target.targetUrl}</small>
                   </span>
-                  <em>{target.lastStatus}</em>
+                  <em>{targetStatusLabel(language, target.lastStatus)}</em>
                 </button>
                 <button
                   className="saved-target-delete"
@@ -303,7 +656,7 @@ function SavedTargetsMenu({
                       setIsDeleting("");
                     }
                   }}
-                  title="移除保存地址和该地址历史数据"
+                  title={t("removeTargetTitle")}
                 >
                   ×
                 </button>
@@ -329,6 +682,7 @@ function DeviceTargetControl({
   busy?: boolean;
   onApply: (targetUrl: string, refreshIntervalMs: number) => void | Promise<void>;
 }) {
+  const { t } = useI18n();
   const [draft, setDraft] = React.useState(targetUrl);
   const [intervalDraft, setIntervalDraft] = React.useState(String(refreshIntervalMs / 1000));
   const [isApplying, setIsApplying] = React.useState(false);
@@ -353,22 +707,23 @@ function DeviceTargetControl({
         setError("");
         try {
           await onApply(normalizeDeviceTarget(draft), clampRefreshInterval(Number(intervalDraft) * 1000));
-        } catch (requestError) {
-          setError(requestError instanceof Error ? requestError.message : "连接失败，未保存设备");
+        } catch {
+          setError(t("connectFailed"));
         } finally {
           setIsApplying(false);
         }
       }}
     >
       <input
-        aria-label="设备目标地址"
+        aria-label={t("targetAddress")}
         disabled={isApplying || disabled}
         value={draft}
         onChange={(event) => setDraft(event.target.value)}
-        placeholder="http://192.168.217.161"
+        placeholder={t("targetPlaceholder")}
       />
       <input
-        aria-label="metrics 获取频率秒"
+        aria-label={t("intervalSeconds")}
+        title={t("intervalSeconds")}
         className="interval-input"
         min="1"
         max="60"
@@ -380,7 +735,7 @@ function DeviceTargetControl({
       />
       <span className="target-unit">s</span>
       <button disabled={isApplying || disabled} type="submit">
-        {isApplying || busy ? "正在连接..." : "保存并连接"}
+        {isApplying || busy ? t("validatingDevice") : t("saveConfig")}
       </button>
       {error ? <strong className="target-error">{error}</strong> : null}
     </form>
@@ -388,6 +743,7 @@ function DeviceTargetControl({
 }
 
 function LoginScreen({ onLogin }: { onLogin: () => void }) {
+  const { t } = useI18n();
   const [password, setPassword] = React.useState("");
   const [error, setError] = React.useState("");
 
@@ -403,23 +759,25 @@ function LoginScreen({ onLogin }: { onLogin: () => void }) {
               await login(password);
               onLogin();
             } catch {
-              setError("密码不正确");
+              setError(t("passwordWrong"));
             }
           }}
         >
           <p>IonBridgeWeb</p>
-          <h1>登录监控面板</h1>
+          <LanguageToggle />
+          <h1>{t("loginTitle")}</h1>
           <input
             autoFocus
-            placeholder="Password"
+            aria-label={t("loginPassword")}
+            placeholder={t("passwordPlaceholder")}
             type="password"
             value={password}
             onChange={(event) => setPassword(event.target.value)}
           />
-          <button type="submit">Login</button>
+          <button type="submit">{t("loginButton")}</button>
           {error ? <span>{error}</span> : null}
         </form>
-        <aside className="login-product" aria-label="小电拼产品图">
+        <aside className="login-product" aria-label={t("productImage")}>
           <img src="/login-product.png" alt="" />
         </aside>
       </section>
@@ -446,17 +804,17 @@ function TargetSetupScreen({
   onSelectSavedTarget: (target: SavedTarget) => void | Promise<void>;
   onDeleteTarget?: (targetUrl: string) => void | Promise<void>;
 }) {
+  const { t } = useI18n();
   const isConnecting = state === "connecting";
   return (
     <main className="target-setup-screen">
       <section className="target-setup-card">
         <div>
-          <p>{isConnecting ? "Connecting target" : "Target offline"}</p>
-          <h1>{isConnecting ? "正在连接设备" : "无法连接设备"}</h1>
+          <LanguageToggle />
+          <p>{isConnecting ? t("connecting") : t("targetOffline")}</p>
+          <h1>{isConnecting ? t("connectingTitle") : t("offlineTitle")}</h1>
           <span>
-            {isConnecting
-              ? "如果刚切换到新的 IP 或 mDNS 地址，可以在这里直接修改，不需要等待本轮连接超时。"
-              : "请确认设备 IP 或 mDNS 地址，保存后面板会重新拉取 metrics、历史和 Machine Info。"}
+            {isConnecting ? t("connectingHelp") : t("offlineHelp")}
           </span>
         </div>
         <SavedTargetsMenu
@@ -487,6 +845,7 @@ function AmberScreen({
   history: PortHistory;
   profile: DeviceVisualProfile;
 }) {
+  const { t } = useI18n();
   const totalPower = metrics.ports.reduce((sum, port) => sum + watts(port), 0);
   const peakPower = Math.max(
     totalPower,
@@ -495,7 +854,7 @@ function AmberScreen({
   const percent = Math.max(0, Math.min(99, (totalPower / profile.totalPowerBudgetW) * 100));
 
   return (
-    <div className="amber-screen" aria-label="琥珀状态屏">
+    <div className="amber-screen" aria-label={t("amberScreen")}>
       <div className="scanline" />
       <div className="amber-time">
         <span><em>NOW</em>{Math.floor(totalPower).toString().padStart(2, "0")}</span>
@@ -513,13 +872,14 @@ function AmberScreen({
 }
 
 function LedStrip({ metrics, profile }: { metrics: Metrics; profile: DeviceVisualProfile }) {
+  const { t } = useI18n();
   const totalPower = metrics.ports.reduce((sum, port) => sum + watts(port), 0);
   const percent = Math.max(0, Math.min(100, (totalPower / profile.totalPowerBudgetW) * 100));
 
   return (
     <div
       className="led-assembly"
-      aria-label="LED 功率条"
+      aria-label={t("ledStrip")}
       style={{ "--led-strength": `${percent / 100}`, "--led-empty": `${100 - percent}%` } as React.CSSProperties}
     >
       <div className="led-meter" aria-hidden="true">
@@ -545,6 +905,7 @@ function DeviceFace({
   history: PortHistory;
   profile: DeviceVisualProfile;
 }) {
+  const { t } = useI18n();
   const frontPorts = profile.frontPortIds
     .map((id) => metrics.ports.find((port) => port.id === id))
     .filter((port): port is PortMetrics => Boolean(port));
@@ -579,7 +940,7 @@ function DeviceFace({
   }, [assetWidth, frontPorts.length, profile.key, sidePorts.length]);
 
   return (
-    <section className="device-panel" aria-label="设备正面">
+    <section className="device-panel" aria-label={t("deviceFront")}>
       <div
         ref={frameRef}
         className="device-stage-frame"
@@ -682,25 +1043,27 @@ function DevicePort({ port }: { port: PortMetrics }) {
 }
 
 function SidePortFace({ port, profile }: { port: PortMetrics; profile: DeviceVisualProfile }) {
+  const { t } = useI18n();
   return (
-    <aside className="side-port-face" aria-label="侧面 C4 端口">
+    <aside className="side-port-face" aria-label={t("sideC4")}>
       <div className="side-seam" />
       <div className="side-brand">{profile.sidePortLabel}</div>
       <DevicePort port={port} />
-      <div className="side-caption">side port</div>
+      <div className="side-caption">{t("sidePort")}</div>
     </aside>
   );
 }
 
 function PortCard({ port }: { port: PortMetrics }) {
+  const { t } = useI18n();
   return (
     <article className={`port-card ${temperatureLevel(port.die_temperature)} ${port.id === 4 ? "side-card" : ""}`}>
       <div className="port-card-top">
         <div>
-          <p>{port.id === 4 ? "USB-C · Side" : port.port_type === "A" ? "USB-A" : "USB-C"}</p>
+          <p>{port.id === 4 ? `USB-C · ${t("sideSuffix")}` : port.port_type === "A" ? "USB-A" : "USB-C"}</p>
           <h2>{portLabel(port)}</h2>
         </div>
-        <span className="state-dot">{port.attached ? "Attached" : "Idle"}</span>
+        <span className="state-dot">{port.attached ? t("attached") : t("idle")}</span>
       </div>
       <div className="power-number">{watts(port).toFixed(1)}W</div>
       <div className="port-grid">
@@ -710,7 +1073,7 @@ function PortCard({ port }: { port: PortMetrics }) {
         <span>{protocolName(port.fc_protocol)}</span>
       </div>
       <div className="budget-row">
-        <span>Budget {port.power_budget}W</span>
+        <span>{t("portLimit")} {port.power_budget}W</span>
         <span>{formatDuration(port.charging_duration_seconds)}</span>
       </div>
     </article>
@@ -726,15 +1089,16 @@ function SummaryStrip({
   heap: HeapMetrics;
   profile: DeviceVisualProfile;
 }) {
+  const { t } = useI18n();
   const totalPower = metrics.ports.reduce((sum, port) => sum + watts(port), 0);
   const heapUsed = heap.total_allocated / (heap.total_allocated + heap.total_free);
 
   return (
     <section className="summary-strip">
-      <SummaryItem icon={<Zap size={18} />} label="Total output" value={`${totalPower.toFixed(1)}W`} detail={`${profile.totalPowerBudgetW}W model max`} />
-      <SummaryItem icon={<Gauge size={18} />} label="Thermal peak" value={`${Math.max(...metrics.ports.map((p) => p.die_temperature))}C`} detail="die temperature" />
-      <SummaryItem icon={<HardDrive size={18} />} label="Heap used" value={`${Math.round(heapUsed * 100)}%`} detail={`${Math.round(heap.total_free / 1024)}KB free`} />
-      <SummaryItem icon={<Cpu size={18} />} label="Runtime" value={`${Math.floor(metrics.system.boot_time_seconds / 60)}m`} detail={metrics.system.app_version} />
+      <SummaryItem icon={<Zap size={18} />} label={t("totalPower")} value={`${totalPower.toFixed(1)}W`} detail={`${profile.totalPowerBudgetW}W ${t("modelMax")}`} />
+      <SummaryItem icon={<Gauge size={18} />} label={t("thermalPeak")} value={`${Math.max(...metrics.ports.map((p) => p.die_temperature))}C`} detail={t("thermalDetail")} />
+      <SummaryItem icon={<HardDrive size={18} />} label={t("heapUsed")} value={`${Math.round(heapUsed * 100)}%`} detail={`${Math.round(heap.total_free / 1024)}KB ${t("available")}`} />
+      <SummaryItem icon={<Cpu size={18} />} label={t("runtime")} value={`${Math.floor(metrics.system.boot_time_seconds / 60)}m`} detail={metrics.system.app_version} />
     </section>
   );
 }
@@ -750,6 +1114,7 @@ function DiagnosticsDeck({
   history: PortHistory;
   machineInfo: MachineInfo;
 }) {
+  const { t } = useI18n();
   const [activeTab, setActiveTab] = React.useState<"info" | "heap" | "ports">("ports");
   const [selectedPortId, setSelectedPortId] = React.useState<number | null>(null);
   const selectedPort = selectedPortId == null
@@ -757,17 +1122,17 @@ function DiagnosticsDeck({
     : metrics.ports.find((port) => port.id === selectedPortId) ?? null;
 
   return (
-    <section className="diagnostics-deck" aria-label="诊断资料">
+    <section className="diagnostics-deck" aria-label={t("diagnosticsAria")}>
       <div className="diagnostics-head">
         <div>
-          <p>IonBridge diagnostics</p>
-          <h2>设备资料与端口历史</h2>
+          <p>{t("diagnostics")}</p>
+          <h2>{t("diagnosticsTitle")}</h2>
         </div>
-        <nav className="diagnostics-tabs" aria-label="诊断视图">
+        <nav className="diagnostics-tabs" aria-label={t("diagnosticsTabs")}>
           {[
-            ["info", "Info"],
-            ["heap", "Heap"],
-            ["ports", "Ports"],
+            ["info", t("tabDevice")],
+            ["heap", t("tabHeap")],
+            ["ports", t("tabPorts")],
           ].map(([key, label]) => (
             <button
               aria-selected={activeTab === key}
@@ -800,28 +1165,29 @@ function DiagnosticsDeck({
 }
 
 function MachineInfoCard({ machineInfo }: { machineInfo: MachineInfo }) {
+  const { t } = useI18n();
   const rows = [
     ["PSN", machineInfo.psn],
-    ["Device Model", machineInfo.device_model],
-    ["Device Name", machineInfo.device_name],
-    ["Product Family", machineInfo.product_family],
-    ["Product Color", machineInfo.product_color],
-    ["HW Rev", machineInfo.hw_rev],
+    [t("deviceModel"), machineInfo.device_model],
+    [t("deviceName"), machineInfo.device_name],
+    [t("productFamily"), machineInfo.product_family],
+    [t("productColor"), machineInfo.product_color],
+    [t("hwRev"), machineInfo.hw_rev],
     ["BLE MAC", machineInfo.ble_mac],
     ["Wi-Fi MAC", machineInfo.wifi_mac],
     ["ESP32", machineInfo.esp32_version],
     ["MCU", machineInfo.mcu_version],
     ["FPGA", machineInfo.fpga_version],
     ["ZRLib", machineInfo.zrlib_version],
-    ["Country", machineInfo.country_code],
+    [t("country"), machineInfo.country_code],
     ["mDNS", `${machineInfo.mdns_hostname}.local`],
   ];
 
   return (
     <article className="diagnostic-card machine-info-card" id="info">
       <div className="diagnostic-title">
-        <p>Info</p>
-        <h3>Machine Info</h3>
+        <p>{t("tabDevice")}</p>
+        <h3>{t("machineInfo")}</h3>
       </div>
       <dl className="machine-list">
         {rows.map(([label, value]) => (
@@ -836,27 +1202,28 @@ function MachineInfoCard({ machineInfo }: { machineInfo: MachineInfo }) {
 }
 
 function HeapCard({ heap }: { heap: HeapMetrics }) {
+  const { t } = useI18n();
   const total = heap.total_allocated + heap.total_free;
   const usedPercent = total > 0 ? Math.round((heap.total_allocated / total) * 100) : 0;
   const rows = [
-    ["Total Free", kilobytes(heap.total_free)],
-    ["Total Allocated", kilobytes(heap.total_allocated)],
-    ["Largest Free Block", kilobytes(heap.largest_free_block)],
-    ["Min Free Ever", kilobytes(heap.min_free)],
-    ["Allocated Blocks", heap.allocated_blocks.toString()],
-    ["Free Blocks", heap.free_blocks.toString()],
-    ["Total Blocks", heap.total_blocks.toString()],
+    [t("heapFree"), kilobytes(heap.total_free)],
+    [t("heapAllocated"), kilobytes(heap.total_allocated)],
+    [t("heapLargestFree"), kilobytes(heap.largest_free_block)],
+    [t("heapMinFree"), kilobytes(heap.min_free)],
+    [t("heapAllocatedBlocks"), heap.allocated_blocks.toString()],
+    [t("heapFreeBlocks"), heap.free_blocks.toString()],
+    [t("heapTotalBlocks"), heap.total_blocks.toString()],
   ];
 
   return (
     <article className="diagnostic-card heap-card" id="heap">
       <div className="diagnostic-title">
-        <p>Heap</p>
-        <h3>内存状态</h3>
+        <p>{t("tabHeap")}</p>
+        <h3>{t("heapStatus")}</h3>
       </div>
       <div className="heap-ring" style={{ "--heap": `${usedPercent}%` } as React.CSSProperties}>
         <strong>{usedPercent}%</strong>
-        <span>used</span>
+        <span>{t("heapUsedShort")}</span>
       </div>
       <dl className="machine-list compact">
         {rows.map(([label, value]) => (
@@ -883,6 +1250,7 @@ function PortHistoryExplorer({
   selectedPortId: number | null;
   onSelectPort: (id: number | null) => void;
 }) {
+  const { t } = useI18n();
   const selectedSamples = selectedPort ? getPortSamples(history, selectedPort.id) : [];
   const selectedSeries = selectedSamples.map((sample, index) => ({
     time: formatSampleTime(sample.ts, selectedSamples.length, index, history.sample_period_ms),
@@ -895,14 +1263,14 @@ function PortHistoryExplorer({
   const min = powers.length > 0 ? Math.min(...powers) : 0;
   const max = powers.length > 0 ? Math.max(...powers) : 0;
   const avg = powers.reduce((sum, power) => sum + power, 0) / Math.max(powers.length, 1);
-  const coverage = getHistoryCoverageLabel(history);
+  const coverage = getHistoryCoverageLabel(history, t);
 
   return (
     <article className="diagnostic-card port-history-card" id="ports">
       <div className="diagnostic-title split-title">
         <div>
-          <p>Ports</p>
-          <h3>每个端口数据与历史</h3>
+          <p>{t("tabPorts")}</p>
+          <h3>{t("perPortHistory")}</h3>
         </div>
         <span>{coverage}</span>
       </div>
@@ -917,17 +1285,17 @@ function PortHistoryExplorer({
               type="button"
             >
               <div className="mini-port-head">
-                <strong>Port {port.id}</strong>
+                <strong>{portLabel(port)}</strong>
                 <span />
               </div>
-              <p>{port.id === 4 ? "USB-C · Side" : port.port_type === "A" ? "USB-A" : "USB-C"}</p>
+              <p>{port.id === 4 ? `USB-C · ${t("sideSuffix")}` : port.port_type === "A" ? "USB-A" : "USB-C"}</p>
               <div className="mono-line">
                 {volts(port.voltage).toFixed(3)}V&nbsp;&nbsp;{amps(port.current).toFixed(3)}A
               </div>
               <div className="mini-power">{watts(port).toFixed(3)}W</div>
               <Sparkline samples={samples.map(samplePower)} />
               <div className="mini-footer">
-                <span>POWER TREND</span>
+                <span>{t("powerTrend")}</span>
                 <strong>{watts(port).toFixed(1)}W</strong>
               </div>
             </button>
@@ -938,12 +1306,12 @@ function PortHistoryExplorer({
       {selectedPort ? <div className="port-detail-panel">
         <div className="port-detail-head">
           <div>
-            <p>Selected</p>
-            <h3>Port {selectedPort.id}</h3>
+            <p>{t("selected")}</p>
+            <h3>{portLabel(selectedPort)}</h3>
           </div>
           <span>
             {portLabel(selectedPort)} · {protocolName(selectedPort.fc_protocol)}
-            {selectedPort.id === 4 ? " · Side" : ""}
+            {selectedPort.id === 4 ? ` · ${t("sideSuffix")}` : ""}
           </span>
         </div>
         <ResponsiveContainer width="100%" height={230}>
@@ -990,48 +1358,48 @@ function PortHistoryExplorer({
           </ComposedChart>
         </ResponsiveContainer>
         <div className="trend-stats">
-          <span>Min {min.toFixed(2)}W</span>
-          <span>Avg {avg.toFixed(2)}W</span>
-          <span>Max {max.toFixed(2)}W</span>
+          <span>{t("min")} {min.toFixed(2)}W</span>
+          <span>{t("avg")} {avg.toFixed(2)}W</span>
+          <span>{t("max")} {max.toFixed(2)}W</span>
         </div>
         <div className="port-detail-lists">
           <dl>
             <div>
-              <dt>State</dt>
+              <dt>{t("state")}</dt>
               <dd>{selectedPort.state}</dd>
             </div>
             <div>
-              <dt>Protocol</dt>
+              <dt>{t("protocol")}</dt>
               <dd>{protocolName(selectedPort.fc_protocol)} · {selectedPort.fc_protocol}</dd>
             </div>
             <div>
-              <dt>Voltage</dt>
+              <dt>{t("voltage")}</dt>
               <dd>{volts(selectedPort.voltage).toFixed(3)}V</dd>
             </div>
             <div>
-              <dt>Current</dt>
+              <dt>{t("current")}</dt>
               <dd>{amps(selectedPort.current).toFixed(3)}A</dd>
             </div>
             <div>
-              <dt>Power</dt>
+              <dt>{t("power")}</dt>
               <dd>{watts(selectedPort).toFixed(3)}W</dd>
             </div>
             <div>
-              <dt>Session</dt>
+              <dt>{t("session")}</dt>
               <dd>{formatDuration(selectedPort.charging_duration_seconds)}</dd>
             </div>
             <div>
-              <dt>Session Charge</dt>
+              <dt>{t("sessionCharge")}</dt>
               <dd>{milliwattHours(selectedPort.session_charge)}</dd>
             </div>
           </dl>
           <dl>
             <div>
-              <dt>Power Budget</dt>
+              <dt>{t("portLimit")}</dt>
               <dd>{selectedPort.power_budget}W</dd>
             </div>
             <div>
-              <dt>Die Temp</dt>
+              <dt>{t("portTemp")}</dt>
               <dd>{selectedPort.die_temperature}C</dd>
             </div>
             <div>
@@ -1039,19 +1407,19 @@ function PortHistoryExplorer({
               <dd>{volts(selectedPort.vin_value).toFixed(2)}V</dd>
             </div>
             <div>
-              <dt>Session ID</dt>
+              <dt>{t("sessionId")}</dt>
               <dd>{selectedPort.session_id}</dd>
             </div>
             <div>
-              <dt>PD Status</dt>
-              <dd>{selectedPort.pd_status ? "Available" : "No PD data"}</dd>
+              <dt>{t("pdStatus")}</dt>
+              <dd>{selectedPort.pd_status ? t("pdAvailable") : t("noPdData")}</dd>
             </div>
           </dl>
         </div>
       </div> : (
         <div className="collapsed-hint">
-          <span>端口详情已收起</span>
-          <strong>点击任意端口展开电压、电流、协议、会话电量和 60 分钟功率曲线。</strong>
+          <span>{t("collapsed")}</span>
+          <strong>{t("collapsedHint")}</strong>
         </div>
       )}
     </article>
@@ -1059,11 +1427,12 @@ function PortHistoryExplorer({
 }
 
 function Sparkline({ samples }: { samples: number[] }) {
+  const { t } = useI18n();
   const width = 180;
   const height = 58;
   if (samples.length === 0) {
     return (
-      <svg className="sparkline" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="端口功率趋势">
+      <svg className="sparkline" viewBox={`0 0 ${width} ${height}`} role="img" aria-label={t("powerTrend")}>
         <line x1="0" x2={width} y1="42" y2="42" />
       </svg>
     );
@@ -1080,7 +1449,7 @@ function Sparkline({ samples }: { samples: number[] }) {
     .join(" ");
 
   return (
-    <svg className="sparkline" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="端口功率趋势">
+    <svg className="sparkline" viewBox={`0 0 ${width} ${height}`} role="img" aria-label={t("powerTrend")}>
       <line x1="0" x2={width} y1="18" y2="18" />
       <line x1="0" x2={width} y1="42" y2="42" />
       <polyline points={points} />
@@ -1096,12 +1465,12 @@ function samplePower(sample: { voltage: number; current: number }) {
   return (sample.voltage * sample.current) / 1_000_000;
 }
 
-function getHistoryCoverageLabel(history: PortHistory) {
+function getHistoryCoverageLabel(history: PortHistory, t: (key: TranslationKey) => string) {
   const samples = Math.max(...history.ports.map((port) => port.samples.length), 0);
   const minutes = Math.round((samples * history.sample_period_ms) / 60000);
-  if (minutes >= 60) return "Local 60m rolling buffer";
-  if (minutes > 0) return `Device ${minutes}m + local fill`;
-  return "Waiting for samples";
+  if (minutes >= 60) return t("local60m");
+  if (minutes > 0) return `${t("deviceMinutesPrefix")} ${minutes}${t("deviceMinutesSuffix")}`;
+  return t("waitingSamples");
 }
 
 function formatSampleTime(
@@ -1153,11 +1522,12 @@ function ProfileSwitcher({
   detectedProfile: DeviceVisualProfile;
   onChange: (profile: DeviceVisualProfile) => void;
 }) {
+  const { t } = useI18n();
   return (
-    <section className="profile-switcher" aria-label="外观主题切换">
+    <section className="profile-switcher" aria-label={t("profileSwitchAria")}>
       <div>
-        <p>Appearance profile</p>
-        <h2>外观主题</h2>
+        <p>{t("appearancePreview")}</p>
+        <h2>{t("appearanceProfile")}</h2>
       </div>
       <div className="profile-options">
         {deviceProfiles.map((profile) => (
@@ -1169,7 +1539,7 @@ function ProfileSwitcher({
           >
             <span>{profile.family}</span>
             <strong>{profile.variant.toUpperCase()}</strong>
-            {profile.key === detectedProfile.key ? <em>Detected</em> : null}
+            {profile.key === detectedProfile.key ? <em>{t("detected")}</em> : null}
           </button>
         ))}
       </div>
@@ -1186,6 +1556,7 @@ function LongHistoryPanel({
   ports: PortMetrics[];
   updatedAt: Date | null;
 }) {
+  const { t } = useI18n();
   const now = React.useMemo(() => new Date(), []);
   const [hours, setHours] = React.useState(24);
   const [rangeMode, setRangeMode] = React.useState<"preset" | "custom">("preset");
@@ -1244,18 +1615,18 @@ function LongHistoryPanel({
     <section className="panel long-history-panel" id="history">
       <div className="panel-header long-history-head">
         <div>
-          <p>Server history</p>
-          <h2>长时间历史与筛选</h2>
+          <p>{t("serverHistory")}</p>
+          <h2>{t("longHistory")}</h2>
           <span className="panel-note">
-            自动跟随 metrics 刷新{loadedAt ? ` · ${loadedAt.toLocaleTimeString("zh-CN", { hour12: false })}` : ""}
+            {t("autoRefreshPrefix")}{loadedAt ? ` · ${loadedAt.toLocaleTimeString("zh-CN", { hour12: false })}` : ""}
           </span>
         </div>
-        <div className="history-filters" aria-label="历史筛选">
+        <div className="history-filters" aria-label={t("historyFilters")}>
           <label>
             <Filter size={15} />
             <select value={rangeMode} onChange={(event) => setRangeMode(event.target.value as "preset" | "custom")}>
-              <option value="preset">Preset</option>
-              <option value="custom">Custom</option>
+              <option value="preset">{t("preset")}</option>
+              <option value="custom">{t("custom")}</option>
             </select>
           </label>
           {rangeMode === "preset" ? <label>
@@ -1268,11 +1639,11 @@ function LongHistoryPanel({
             </select>
           </label> : <>
             <label className="datetime-filter">
-              <span>From</span>
+              <span>{t("from")}</span>
               <input type="datetime-local" value={customStart} onChange={(event) => setCustomStart(event.target.value)} />
             </label>
             <label className="datetime-filter">
-              <span>To</span>
+              <span>{t("to")}</span>
               <input type="datetime-local" value={customEnd} onChange={(event) => setCustomEnd(event.target.value)} />
             </label>
           </>}
@@ -1282,10 +1653,10 @@ function LongHistoryPanel({
               value={portFilter ?? "all"}
               onChange={(event) => setPortFilter(event.target.value === "all" ? null : Number(event.target.value))}
             >
-              <option value="all">All ports</option>
+              <option value="all">{t("allPorts")}</option>
               {ports.map((port) => (
                 <option key={port.id} value={port.id}>
-                  {port.id === 4 ? "C4 Side" : portLabel(port)}
+                  {port.id === 4 ? `C4 ${t("sideSuffix")}` : portLabel(port)}
                 </option>
               ))}
             </select>
@@ -1342,24 +1713,24 @@ function LongHistoryPanel({
             </ComposedChart>
           </ResponsiveContainer>
           <div className="history-stats">
-            <span>Samples {rows.length}</span>
-            <span>Avg {avgPower.toFixed(2)}W</span>
-            <span>Peak {maxPower.toFixed(2)}W</span>
-            <span>Temp {maxTemp.toFixed(0)}C</span>
+            <span>{t("samples")} {rows.length}</span>
+            <span>{t("avg")} {avgPower.toFixed(2)}W</span>
+            <span>{t("max")} {maxPower.toFixed(2)}W</span>
+            <span>{t("highestTemp")} {maxTemp.toFixed(0)}C</span>
           </div>
         </>
       ) : (
         <div className="history-empty">
           <strong>
             {status === "loading"
-              ? "正在读取服务端历史..."
+              ? t("readingHistory")
               : !canQuery
-                ? "自定义时间范围无效"
+                ? t("invalidRange")
               : status === "empty"
-                ? "当前筛选范围还没有历史样本"
-                : "当前运行模式没有可用的服务端历史"}
+                ? t("emptyHistory")
+                : t("unavailableHistory")}
           </strong>
-          <span>Docker/生产服务会持续写入 `/data/history`，开发模式下仍可使用设备 60 分钟历史。</span>
+          <span>{t("sqliteHint")}</span>
         </div>
       )}
     </section>
@@ -1418,6 +1789,7 @@ function chooseHistoryBucketMs(rows: ServerHistoryRow[]) {
 }
 
 function PowerChart({ history }: { history: PortHistory }) {
+  const { t } = useI18n();
   const basePort = history.ports.reduce(
     (longest, port) => (port.samples.length > longest.samples.length ? port : longest),
     history.ports[0],
@@ -1448,9 +1820,9 @@ function PowerChart({ history }: { history: PortHistory }) {
     <section className="panel chart-panel">
       <div className="panel-header">
         <div>
-          <p>Port timeline</p>
-          <h2>实时功率与温度</h2>
-          <span className="panel-note">{getHistoryCoverageLabel(history)}</span>
+          <p>{t("portTimeline")}</p>
+          <h2>{t("livePowerAndTemp")}</h2>
+          <span className="panel-note">{getHistoryCoverageLabel(history, t)}</span>
         </div>
         <Activity size={20} />
       </div>
@@ -1508,12 +1880,13 @@ function PowerChart({ history }: { history: PortHistory }) {
 }
 
 function TaskPanel({ tasks }: { tasks: TaskMetrics[] }) {
+  const { t } = useI18n();
   return (
     <section className="panel task-panel">
       <div className="panel-header">
         <div>
-          <p>Runtime</p>
-          <h2>任务负载</h2>
+          <p>{t("runtime")}</p>
+          <h2>{t("taskLoad")}</h2>
         </div>
         <Cpu size={20} />
       </div>
@@ -1536,12 +1909,13 @@ function TaskPanel({ tasks }: { tasks: TaskMetrics[] }) {
 }
 
 function SystemPanel({ metrics, heap }: { metrics: Metrics; heap: HeapMetrics }) {
+  const { t } = useI18n();
   return (
     <section className="panel system-panel">
       <div className="panel-header">
         <div>
-          <p>Device</p>
-          <h2>系统状态</h2>
+          <p>{t("tabDevice")}</p>
+          <h2>{t("systemStatus")}</h2>
         </div>
         <RefreshCw size={20} />
       </div>
@@ -1563,8 +1937,8 @@ function SystemPanel({ metrics, heap }: { metrics: Metrics; heap: HeapMetrics })
           <dd>{metrics.wifi.bssid}</dd>
         </div>
         <div>
-          <dt>Heap</dt>
-          <dd>{Math.round(heap.total_free / 1024)}KB free · {heap.allocated_blocks} blocks</dd>
+          <dt>{t("tabHeap")}</dt>
+          <dd>{Math.round(heap.total_free / 1024)}KB {t("available")} · {heap.allocated_blocks} blocks</dd>
         </div>
       </dl>
     </section>
@@ -1581,6 +1955,7 @@ function RuntimePanel({ metrics, heap }: { metrics: Metrics; heap: HeapMetrics }
 }
 
 function App() {
+  const [language, setLanguageState] = React.useState<Language>(readLanguage);
   const [targetUrl, setTargetUrl] = React.useState(readDeviceTarget);
   const [refreshIntervalMs, setRefreshIntervalMs] = React.useState(readRefreshInterval);
   const [savedTargets, setSavedTargets] = React.useState<SavedTarget[]>([]);
@@ -1589,6 +1964,14 @@ function App() {
   const [activeProfileKey, setActiveProfileKey] = React.useState<string | null>(null);
   const [connectionActionPending, setConnectionActionPending] = React.useState(false);
   const connectionActionPendingRef = React.useRef(false);
+  const i18n = React.useMemo(() => ({
+    language,
+    setLanguage: (nextLanguage: Language) => {
+      setLanguageState(nextLanguage);
+      writeLanguage(nextLanguage);
+    },
+    t: (key: TranslationKey) => translate(language, key),
+  }), [language]);
 
   async function runConnectionAction(action: () => Promise<void>) {
     if (connectionActionPendingRef.current) return;
@@ -1679,40 +2062,52 @@ function App() {
   }, [updatedAt, passwordRequired]);
 
   if (!ready) {
-    return <main className="loading">ingBar warming up...</main>;
+    return (
+      <I18nContext.Provider value={i18n}>
+        <main className="loading">{i18n.t("loading")}</main>
+      </I18nContext.Provider>
+    );
   }
 
   if (passwordRequired) {
-    return <LoginScreen onLogin={() => setPasswordRequired(false)} />;
+    return (
+      <I18nContext.Provider value={i18n}>
+        <LoginScreen onLogin={() => setPasswordRequired(false)} />
+      </I18nContext.Provider>
+    );
   }
 
   if (!data) {
     return (
-      <TargetSetupScreen
-        refreshIntervalMs={refreshIntervalMs}
-        state={targetUrl.trim() ? "connecting" : "offline"}
-        targetUrl={targetUrl}
-        savedTargets={savedTargets}
-        connectionActionPending={connectionActionPending}
-        onApply={handleConnectionSettingsApply}
-        onSelectSavedTarget={handleSavedTargetSelect}
-        onDeleteTarget={handleDeleteSavedTarget}
-      />
+      <I18nContext.Provider value={i18n}>
+        <TargetSetupScreen
+          refreshIntervalMs={refreshIntervalMs}
+          state={targetUrl.trim() ? "connecting" : "offline"}
+          targetUrl={targetUrl}
+          savedTargets={savedTargets}
+          connectionActionPending={connectionActionPending}
+          onApply={handleConnectionSettingsApply}
+          onSelectSavedTarget={handleSavedTargetSelect}
+          onDeleteTarget={handleDeleteSavedTarget}
+        />
+      </I18nContext.Provider>
     );
   }
 
   const { metrics, history, heap, machineInfo, source } = data;
   if (source === "mock") {
     return (
-      <TargetSetupScreen
-        refreshIntervalMs={refreshIntervalMs}
-        targetUrl={targetUrl}
-        savedTargets={savedTargets}
-        connectionActionPending={connectionActionPending}
-        onApply={handleConnectionSettingsApply}
-        onSelectSavedTarget={handleSavedTargetSelect}
-        onDeleteTarget={handleDeleteSavedTarget}
-      />
+      <I18nContext.Provider value={i18n}>
+        <TargetSetupScreen
+          refreshIntervalMs={refreshIntervalMs}
+          targetUrl={targetUrl}
+          savedTargets={savedTargets}
+          connectionActionPending={connectionActionPending}
+          onApply={handleConnectionSettingsApply}
+          onSelectSavedTarget={handleSavedTargetSelect}
+          onDeleteTarget={handleDeleteSavedTarget}
+        />
+      </I18nContext.Provider>
     );
   }
 
@@ -1722,39 +2117,41 @@ function App() {
     detectedProfile;
 
   return (
-    <main className="app">
-      <Header
-        metrics={metrics}
-        profile={activeProfile}
-        source={source}
-        targetUrl={targetUrl}
-        refreshIntervalMs={refreshIntervalMs}
-        savedTargets={savedTargets}
-        updatedAt={updatedAt}
-        connectionActionPending={connectionActionPending}
-        onApply={handleConnectionSettingsApply}
-        onSelectSavedTarget={handleSavedTargetSelect}
-        onDeleteTarget={handleDeleteSavedTarget}
-      />
-      <ProfileSwitcher
-        activeProfile={activeProfile}
-        detectedProfile={detectedProfile}
-        onChange={(profile) => setActiveProfileKey(profile.key)}
-      />
-      <DeviceFace history={history} metrics={metrics} profile={activeProfile} />
-      <SummaryStrip heap={heap} metrics={metrics} profile={activeProfile} />
-      <section className="ports-grid" aria-label="端口遥测">
-        {metrics.ports.map((port) => (
-          <PortCard key={port.id} port={port} />
-        ))}
-      </section>
-      <section className="dashboard-grid">
-        <PowerChart history={history} />
-        <RuntimePanel metrics={metrics} heap={heap} />
-      </section>
-      <LongHistoryPanel targetUrl={targetUrl} ports={metrics.ports} updatedAt={updatedAt} />
-      <DiagnosticsDeck heap={heap} history={history} machineInfo={machineInfo} metrics={metrics} />
-    </main>
+    <I18nContext.Provider value={i18n}>
+      <main className="app">
+        <Header
+          metrics={metrics}
+          profile={activeProfile}
+          source={source}
+          targetUrl={targetUrl}
+          refreshIntervalMs={refreshIntervalMs}
+          savedTargets={savedTargets}
+          updatedAt={updatedAt}
+          connectionActionPending={connectionActionPending}
+          onApply={handleConnectionSettingsApply}
+          onSelectSavedTarget={handleSavedTargetSelect}
+          onDeleteTarget={handleDeleteSavedTarget}
+        />
+        <DeviceFace history={history} metrics={metrics} profile={activeProfile} />
+        <ProfileSwitcher
+          activeProfile={activeProfile}
+          detectedProfile={detectedProfile}
+          onChange={(profile) => setActiveProfileKey(profile.key)}
+        />
+        <SummaryStrip heap={heap} metrics={metrics} profile={activeProfile} />
+        <section className="ports-grid" aria-label={i18n.t("portTelemetry")}>
+          {metrics.ports.map((port) => (
+            <PortCard key={port.id} port={port} />
+          ))}
+        </section>
+        <section className="dashboard-grid">
+          <PowerChart history={history} />
+          <RuntimePanel metrics={metrics} heap={heap} />
+        </section>
+        <LongHistoryPanel targetUrl={targetUrl} ports={metrics.ports} updatedAt={updatedAt} />
+        <DiagnosticsDeck heap={heap} history={history} machineInfo={machineInfo} metrics={metrics} />
+      </main>
+    </I18nContext.Provider>
   );
 }
 

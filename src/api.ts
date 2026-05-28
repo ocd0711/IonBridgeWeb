@@ -76,7 +76,7 @@ export async function login(password: string): Promise<ServerSession> {
     body: JSON.stringify({ password }),
   });
   if (!response.ok) {
-    throw new Error("Password rejected");
+    throw new Error("密码不正确");
   }
   return response.json() as Promise<ServerSession>;
 }
@@ -97,7 +97,7 @@ export async function deleteSavedTarget(targetUrl: string) {
   const params = new URLSearchParams({ target: normalizeDeviceTarget(targetUrl) });
   const response = await fetch(`/api/targets?${params.toString()}`, { method: "DELETE" });
   if (!response.ok) {
-    throw new Error("Failed to delete target");
+    throw new Error("移除设备失败");
   }
   return response.json() as Promise<ServerSession["config"]>;
 }
@@ -118,7 +118,7 @@ export async function setActiveServerTarget(targetUrl: string) {
     body: JSON.stringify({ targetUrl: normalizeDeviceTarget(targetUrl) }),
   });
   if (!response.ok) {
-    throw new Error("Failed to switch target");
+    throw new Error("切换设备失败");
   }
   return response.json() as Promise<ServerSession["config"]>;
 }
@@ -145,7 +145,7 @@ export async function fetchServerHistory({
   if (port != null) params.set("port", String(port));
 
   const response = await fetch(`/api/history?${params.toString()}`, { cache: "no-store" });
-  if (!response.ok) throw new Error("Server history unavailable");
+  if (!response.ok) throw new Error("服务端历史不可用");
   const payload = await response.json() as { rows?: ServerHistoryRow[] };
   return payload.rows ?? [];
 }
