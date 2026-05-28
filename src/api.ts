@@ -17,6 +17,21 @@ const REQUEST_TIMEOUT_MS = 3500;
 const METRICS_TIMEOUT_MS = 8000;
 const MACHINE_INFO_TIMEOUT_MS = 8000;
 
+export class AuthRequiredError extends Error {
+  constructor() {
+    super("authentication required");
+    this.name = "AuthRequiredError";
+  }
+}
+
+export function isAuthRequiredError(error: unknown) {
+  return error instanceof AuthRequiredError;
+}
+
+function throwIfUnauthorized(response: Response) {
+  if (response.status === 401) throw new AuthRequiredError();
+}
+
 export function normalizeDeviceTarget(targetUrl: string) {
   const trimmed = targetUrl.trim().replace(/\/+$/, "");
   if (!trimmed) return DEFAULT_DEVICE_TARGET;
@@ -110,6 +125,7 @@ export async function saveServerConfig(config: { targetUrl: string; refreshInter
     body: JSON.stringify(config),
   });
   if (!response.ok) {
+    throwIfUnauthorized(response);
     throw new Error(await responseErrorMessage(response, "连接失败或设备未提供 PSN，未保存"));
   }
   return response.json() as Promise<ServerSession["config"]>;
@@ -119,6 +135,7 @@ export async function deleteSavedTarget(targetUrl: string) {
   const params = new URLSearchParams({ target: normalizeDeviceTarget(targetUrl) });
   const response = await fetch(`/api/targets?${params.toString()}`, { method: "DELETE" });
   if (!response.ok) {
+    throwIfUnauthorized(response);
     throw new Error("移除设备失败");
   }
   return response.json() as Promise<ServerSession["config"]>;
@@ -135,6 +152,7 @@ export async function updateSavedTargetNote(target: { targetUrl: string; deviceK
     }),
   });
   if (!response.ok) {
+    throwIfUnauthorized(response);
     throw new Error("更新备注失败");
   }
   return response.json() as Promise<ServerSession["config"]>;
@@ -156,6 +174,7 @@ export async function setActiveServerTarget(targetUrl: string) {
     body: JSON.stringify({ targetUrl: normalizeDeviceTarget(targetUrl) }),
   });
   if (!response.ok) {
+    throwIfUnauthorized(response);
     throw new Error("切换设备失败");
   }
   return response.json() as Promise<ServerSession["config"]>;
@@ -183,7 +202,10 @@ export async function fetchServerHistory({
   if (port != null) params.set("port", String(port));
 
   const response = await fetch(`/api/history?${params.toString()}`, { cache: "no-store" });
-  if (!response.ok) throw new Error("服务端历史不可用");
+  if (!response.ok) {
+    throwIfUnauthorized(response);
+    throw new Error("服务端历史不可用");
+  }
   const payload = await response.json() as { rows?: ServerHistoryRow[] };
   return payload.rows ?? [];
 }
@@ -199,6 +221,7 @@ async function fetchRecentServerHistory(targetUrl: string): Promise<ServerHistor
 async function getJson<T>(path: string, targetUrl: string, timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> {
   const response = await fetchWithTimeout(endpoint(path, targetUrl), timeoutMs);
   if (!response.ok) {
+    throwIfUnauthorized(response);
     throw new Error(`${path} returned ${response.status}`);
   }
   return response.json() as Promise<T>;
@@ -207,6 +230,7 @@ async function getJson<T>(path: string, targetUrl: string, timeoutMs = REQUEST_T
 async function getMachineInfo(targetUrl: string): Promise<MachineInfo> {
   const response = await fetchWithTimeout(endpoint("/", targetUrl), MACHINE_INFO_TIMEOUT_MS);
   if (!response.ok) {
+    throwIfUnauthorized(response);
     throw new Error(`/ returned ${response.status}`);
   }
 
@@ -277,7 +301,8 @@ export async function fetchDashboardData(targetUrl = DEFAULT_DEVICE_TARGET): Pro
     ]);
 
     return { metrics, history: mergeHistory(history, metrics, normalizedTarget), heap, machineInfo, source: "device" };
-  } catch {
+  } catch (error) {
+    if (isAuthRequiredError(error)) throw error;
     const rows = await fetchRecentServerHistory(normalizedTarget);
     if (rows.length > 0) {
       const metrics = offlineMetricsFromHistory(rows);

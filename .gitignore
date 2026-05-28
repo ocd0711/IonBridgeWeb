@@ -4,3 +4,4 @@ data/
 *.tsbuildinfo
 preview-*.png
 .DS_Store
+.codegraph/

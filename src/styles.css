@@ -1537,6 +1537,37 @@ h1 {
     0 14px 30px rgba(68, 52, 38, 0.1);
 }
 
+.port-va-charts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.metric-trend-card {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  background: rgba(255, 253, 250, 0.7);
+  padding: 12px 12px 8px;
+}
+
+.metric-trend-card h4 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+.live-va-charts {
+  margin-top: 12px;
+}
+
+.port-history-filters {
+  justify-content: flex-start;
+}
+
 .mini-port-head {
   display: flex;
   align-items: center;
@@ -2068,6 +2099,10 @@ h1 {
 
   .port-history-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .port-va-charts {
+    grid-template-columns: 1fr;
   }
 
   .ports-grid,

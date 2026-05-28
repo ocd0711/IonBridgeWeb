@@ -25,6 +25,7 @@ import {
 } from "recharts";
 
 import {
+  isAuthRequiredError,
   fetchDashboardData,
   fetchServerHistory,
   getServerSession,
@@ -461,6 +462,7 @@ function useDashboardData(
   refreshIntervalMs: number,
   enabled: boolean,
   onConfigUpdate?: (config: ServerSession["config"]) => void,
+  onAuthRequired?: () => void,
 ) {
   const [data, setData] = React.useState<DashboardData | null>(null);
   const [updatedAt, setUpdatedAt] = React.useState<Date | null>(null);
@@ -471,6 +473,7 @@ function useDashboardData(
     let alive = true;
     let lastLiveAt = 0;
     let lastSnapshotAt = 0;
+    let refreshInFlight = false;
     let eventSource: EventSource | null = null;
     let initialTimer = 0;
     setData(null);
@@ -479,11 +482,22 @@ function useDashboardData(
     if (!enabled || !targetUrl.trim()) return;
 
     async function refresh() {
-      const next = await fetchDashboardData(targetUrl);
-      if (!alive) return;
-      setData(next);
-      setUpdatedAt(new Date());
-      if (!lastLiveAt) setTransportState("fallback");
+      if (refreshInFlight) return;
+      refreshInFlight = true;
+      const startedAt = Date.now();
+      try {
+        const next = await fetchDashboardData(targetUrl);
+        if (!alive || lastSnapshotAt > startedAt) return;
+        setData(next);
+        setUpdatedAt(new Date());
+        if (!lastSnapshotAt || next.source !== "device") setTransportState("fallback");
+      } catch (error) {
+        if (isAuthRequiredError(error)) {
+          onAuthRequired?.();
+        }
+      } finally {
+        refreshInFlight = false;
+      }
     }
 
     const supportsLiveStream = typeof EventSource !== "undefined";
@@ -492,11 +506,12 @@ function useDashboardData(
       eventSource.onopen = () => {
         if (!alive) return;
         lastLiveAt = Date.now();
-        setTransportState("sse");
+        setTransportState((current) => current === "fallback" ? current : "connecting");
       };
       eventSource.onerror = () => {
         if (!alive) return;
-        setTransportState("reconnecting");
+        setTransportState((current) => current === "fallback" ? current : "reconnecting");
+        void refresh();
       };
       eventSource.addEventListener("snapshot", (event) => {
         if (!alive) return;
@@ -511,17 +526,17 @@ function useDashboardData(
       eventSource.addEventListener("status", (event) => {
         if (!alive) return;
         lastLiveAt = Date.now();
-        setTransportState("sse");
+        setTransportState((current) => lastSnapshotAt ? "sse" : current);
         const status = JSON.parse((event as MessageEvent).data) as LiveStatusEvent;
         if (status.config) onConfigUpdate?.(status.config);
       });
     }
     initialTimer = window.setTimeout(() => {
-      if (lastLiveAt) return;
+      if (lastSnapshotAt) return;
       refresh();
     }, supportsLiveStream ? Math.min(1500, Math.max(500, refreshIntervalMs / 2)) : 0);
     const timer = window.setInterval(() => {
-      if (lastLiveAt && Date.now() - lastLiveAt < refreshIntervalMs * 2.5) return;
+      if (lastSnapshotAt && Date.now() - lastSnapshotAt < refreshIntervalMs * 2.5) return;
       refresh();
     }, refreshIntervalMs);
 
@@ -531,7 +546,7 @@ function useDashboardData(
       window.clearTimeout(initialTimer);
       window.clearInterval(timer);
     };
-  }, [targetUrl, refreshIntervalMs, refreshToken, enabled, onConfigUpdate]);
+  }, [targetUrl, refreshIntervalMs, refreshToken, enabled, onConfigUpdate, onAuthRequired]);
 
   return { data, transportState, updatedAt, retry: () => setRefreshToken((token) => token + 1) };
 }
@@ -1250,11 +1265,13 @@ function DiagnosticsDeck({
   heap,
   history,
   machineInfo,
+  targetUrl,
 }: {
   metrics: Metrics;
   heap: HeapMetrics;
   history: PortHistory;
   machineInfo: MachineInfo;
+  targetUrl: string;
 }) {
   const { t } = useI18n();
   const [activeTab, setActiveTab] = React.useState<"info" | "heap" | "ports">("ports");
@@ -1298,6 +1315,7 @@ function DiagnosticsDeck({
             ports={metrics.ports}
             selectedPort={selectedPort}
             selectedPortId={selectedPortId}
+            targetUrl={targetUrl}
             onSelectPort={setSelectedPortId}
           />
         ) : null}
@@ -1384,23 +1402,76 @@ function PortHistoryExplorer({
   history,
   selectedPort,
   selectedPortId,
+  targetUrl,
   onSelectPort,
 }: {
   ports: PortMetrics[];
   history: PortHistory;
   selectedPort: PortMetrics | null;
   selectedPortId: number | null;
+  targetUrl: string;
   onSelectPort: (id: number | null) => void;
 }) {
   const { t } = useI18n();
+  const now = React.useMemo(() => new Date(), []);
+  const [hours, setHours] = React.useState(1);
+  const [rangeMode, setRangeMode] = React.useState<"preset" | "custom">("preset");
+  const [customStart, setCustomStart] = React.useState(formatDateTimeLocal(new Date(now.getTime() - 60 * 60 * 1000)));
+  const [customEnd, setCustomEnd] = React.useState(formatDateTimeLocal(now));
+  const [serverRows, setServerRows] = React.useState<ServerHistoryRow[]>([]);
+  const [serverStatus, setServerStatus] = React.useState<"idle" | "loading" | "ready" | "empty" | "unavailable">("idle");
+  const start = rangeMode === "custom" ? parseDateTimeLocal(customStart) : undefined;
+  const end = rangeMode === "custom" ? parseDateTimeLocal(customEnd) : undefined;
+  const canQuery = selectedPortId != null && (rangeMode === "preset" || (start != null && end != null && start <= end));
+
+  React.useEffect(() => {
+    let alive = true;
+    if (!canQuery || selectedPortId == null) {
+      setServerRows([]);
+      setServerStatus("idle");
+      return () => {
+        alive = false;
+      };
+    }
+    setServerStatus("loading");
+    fetchServerHistory({
+      targetUrl,
+      hours: rangeMode === "preset" ? hours : undefined,
+      start,
+      end,
+      port: selectedPortId,
+    })
+      .then((nextRows) => {
+        if (!alive) return;
+        setServerRows(nextRows);
+        setServerStatus(nextRows.length > 0 ? "ready" : "empty");
+      })
+      .catch(() => {
+        if (!alive) return;
+        setServerRows([]);
+        setServerStatus("unavailable");
+      });
+    return () => {
+      alive = false;
+    };
+  }, [targetUrl, selectedPortId, hours, rangeMode, customStart, customEnd, canQuery, start, end]);
+
   const selectedSamples = selectedPort ? getPortSamples(history, selectedPort.id) : [];
-  const selectedSeries = selectedSamples.map((sample, index) => ({
+  const localSeries = selectedSamples.map((sample, index) => ({
     time: formatSampleTime(sample.ts, selectedSamples.length, index, history.sample_period_ms),
     power: samplePower(sample),
     temperature: validTemperature(sample.temperature_c) ?? validTemperature(selectedPort?.die_temperature),
     voltage: volts(sample.voltage),
     current: amps(sample.current),
   }));
+  const serverSeries = serverRows.map((row) => ({
+    time: new Date(row.ts).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }),
+    power: row.power_w,
+    temperature: validTemperature(row.temperature_c) ?? validTemperature(selectedPort?.die_temperature),
+    voltage: volts(row.voltage),
+    current: amps(row.current),
+  }));
+  const selectedSeries = serverSeries.length > 0 ? serverSeries : localSeries;
   const powers = selectedSeries.map((sample) => sample.power);
   const min = powers.length > 0 ? Math.min(...powers) : 0;
   const max = powers.length > 0 ? Math.max(...powers) : 0;
@@ -1456,6 +1527,44 @@ function PortHistoryExplorer({
             {selectedPort.id === 4 ? ` · ${t("sideSuffix")}` : ""}
           </span>
         </div>
+        <div className="history-filters port-history-filters" aria-label={t("historyFilters")}>
+          <label>
+            <Filter size={15} />
+            <select value={rangeMode} onChange={(event) => setRangeMode(event.target.value as "preset" | "custom")}>
+              <option value="preset">{t("preset")}</option>
+              <option value="custom">{t("custom")}</option>
+            </select>
+          </label>
+          {rangeMode === "preset" ? <label>
+            <select value={hours} onChange={(event) => setHours(Number(event.target.value))}>
+              <option value={1}>1h</option>
+              <option value={6}>6h</option>
+              <option value={24}>24h</option>
+              <option value={168}>7d</option>
+              <option value={720}>30d</option>
+            </select>
+          </label> : <>
+            <label className="datetime-filter">
+              <span>{t("from")}</span>
+              <input type="datetime-local" value={customStart} onChange={(event) => setCustomStart(event.target.value)} />
+            </label>
+            <label className="datetime-filter">
+              <span>{t("to")}</span>
+              <input type="datetime-local" value={customEnd} onChange={(event) => setCustomEnd(event.target.value)} />
+            </label>
+          </>}
+          <span className="panel-note">
+            {serverStatus === "loading"
+              ? t("readingHistory")
+              : serverStatus === "ready"
+                ? `${t("samples")} ${serverRows.length}`
+                : serverStatus === "empty"
+                  ? t("local60m")
+                  : serverStatus === "unavailable"
+                    ? t("unavailableHistory")
+                    : t("local60m")}
+          </span>
+        </div>
         <ResponsiveContainer width="100%" height={230}>
           <ComposedChart data={selectedSeries} margin={{ top: 12, right: 18, left: -22, bottom: 0 }}>
             <defs>
@@ -1503,6 +1612,22 @@ function PortHistoryExplorer({
           <span>{t("min")} {min.toFixed(2)}W</span>
           <span>{t("avg")} {avg.toFixed(2)}W</span>
           <span>{t("max")} {max.toFixed(2)}W</span>
+        </div>
+        <div className="port-va-charts">
+          <MetricTrendChart
+            color="#2f806c"
+            data={selectedSeries}
+            dataKey="voltage"
+            title={`${t("voltage")} (V)`}
+            unit="V"
+          />
+          <MetricTrendChart
+            color="#6f5aa8"
+            data={selectedSeries}
+            dataKey="current"
+            title={`${t("current")} (A)`}
+            unit="A"
+          />
         </div>
         <div className="port-detail-lists">
           <dl>
@@ -1565,6 +1690,86 @@ function PortHistoryExplorer({
         </div>
       )}
     </article>
+  );
+}
+
+function MetricTrendChart({
+  color,
+  data,
+  dataKey,
+  title,
+  unit,
+}: {
+  color: string;
+  data: Array<{ time: string; voltage?: number | string | null; current?: number | string | null }>;
+  dataKey: "voltage" | "current";
+  title: string;
+  unit: string;
+}) {
+  return (
+    <div className="metric-trend-card">
+      <h4>{title}</h4>
+      <ResponsiveContainer width="100%" height={150}>
+        <ComposedChart data={data} margin={{ top: 8, right: 12, left: -24, bottom: 0 }}>
+          <CartesianGrid stroke="#e6dfd4" vertical={false} />
+          <XAxis dataKey="time" tickLine={false} axisLine={false} tick={{ fill: "#766b5f", fontSize: 11 }} />
+          <YAxis domain={["auto", "auto"]} tickLine={false} axisLine={false} tick={{ fill: "#766b5f", fontSize: 11 }} />
+          <Tooltip formatter={(value) => `${Number(value).toFixed(3)}${unit}`} />
+          <Line
+            connectNulls
+            dataKey={dataKey}
+            dot={false}
+            isAnimationActive={false}
+            stroke={color}
+            strokeWidth={2.25}
+            type="monotone"
+          />
+        </ComposedChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+function MultiMetricTrendChart({
+  colors,
+  data,
+  keys,
+  labels,
+  title,
+  unit,
+}: {
+  colors: string[];
+  data: Array<Record<string, number | string | null> & { time: string }>;
+  keys: string[];
+  labels: string[];
+  title: string;
+  unit: string;
+}) {
+  return (
+    <div className="metric-trend-card">
+      <h4>{title}</h4>
+      <ResponsiveContainer width="100%" height={150}>
+        <ComposedChart data={data} margin={{ top: 8, right: 12, left: -24, bottom: 0 }}>
+          <CartesianGrid stroke="#e6dfd4" vertical={false} />
+          <XAxis dataKey="time" tickLine={false} axisLine={false} tick={{ fill: "#766b5f", fontSize: 11 }} />
+          <YAxis domain={["auto", "auto"]} tickLine={false} axisLine={false} tick={{ fill: "#766b5f", fontSize: 11 }} />
+          <Tooltip formatter={(value, name) => [`${Number(value).toFixed(3)}${unit}`, String(name).replace(/[VA]$/, "")]} />
+          {keys.map((key, index) => (
+            <Line
+              connectNulls
+              dataKey={key}
+              dot={false}
+              isAnimationActive={false}
+              key={key}
+              name={labels[index]}
+              stroke={colors[index]}
+              strokeWidth={2}
+              type="monotone"
+            />
+          ))}
+        </ComposedChart>
+      </ResponsiveContainer>
+    </div>
   );
 }
 
@@ -1979,12 +2184,14 @@ function chooseHistoryBucketMs(rows: ServerHistoryRow[]) {
 
 function PowerChart({ history }: { history: PortHistory }) {
   const { t } = useI18n();
+  const portKeys = ["A", "C1", "C2", "C3", "C4"];
+  const portColors = ["#2b2926", "#f47b20", "#d9571c", "#917a54", "#6d9483"];
   const basePort = history.ports.reduce(
     (longest, port) => (port.samples.length > longest.samples.length ? port : longest),
     history.ports[0],
   );
   const rows = basePort?.samples.map((_, sampleIndex) => {
-    const row: Record<string, number | string | null> = {
+    const row: Record<string, number | string | null> & { time: string } = {
       time: formatSampleTime(
         basePort.samples[sampleIndex]?.ts,
         basePort.samples.length,
@@ -1995,7 +2202,10 @@ function PowerChart({ history }: { history: PortHistory }) {
 
     for (const port of history.ports) {
       const sample = port.samples[sampleIndex];
-      row[port.port === 0 ? "A" : `C${port.port}`] = sample ? samplePower(sample) : 0;
+      const key = port.port === 0 ? "A" : `C${port.port}`;
+      row[key] = sample ? samplePower(sample) : 0;
+      row[`${key}V`] = sample ? volts(sample.voltage) : null;
+      row[`${key}A`] = sample ? amps(sample.current) : null;
     }
     row.temperature = maxValidTemperature(history.ports.map((port) => port.samples[sampleIndex]?.temperature_c));
 
@@ -2034,12 +2244,12 @@ function PowerChart({ history }: { history: PortHistory }) {
             contentStyle={{ border: "1px solid #2e2823", borderRadius: 8 }}
             formatter={(value, name) => name === "temperature" ? formatTemperatureTooltip(value) : `${Number(value).toFixed(1)}W`}
           />
-          {["A", "C1", "C2", "C3", "C4"].map((key, index) => (
+          {portKeys.map((key, index) => (
             <Area
               key={key}
               type="monotone"
               dataKey={key}
-              stroke={["#2b2926", "#f47b20", "#d9571c", "#917a54", "#6d9483"][index]}
+              stroke={portColors[index]}
               fill={index === 1 ? "url(#amberFill)" : "transparent"}
               strokeWidth={2}
               dot={false}
@@ -2061,6 +2271,24 @@ function PowerChart({ history }: { history: PortHistory }) {
           />
         </ComposedChart>
       </ResponsiveContainer>
+      <div className="port-va-charts live-va-charts">
+        <MultiMetricTrendChart
+          colors={portColors}
+          data={rows}
+          keys={portKeys.map((key) => `${key}V`)}
+          labels={portKeys}
+          title={`${t("voltage")} (V)`}
+          unit="V"
+        />
+        <MultiMetricTrendChart
+          colors={portColors}
+          data={rows}
+          keys={portKeys.map((key) => `${key}A`)}
+          labels={portKeys}
+          title={`${t("current")} (A)`}
+          unit="A"
+        />
+      </div>
     </section>
   );
 }
@@ -2154,12 +2382,17 @@ function App() {
     setSavedTargets(nextConfig.targets);
     setShowAppearanceSwitcher(Boolean(nextConfig.showAppearanceSwitcher));
   }, []);
+  const handleAuthRequired = React.useCallback(() => {
+    setPasswordRequired(true);
+    setServerSession((current) => current ? { ...current, authenticated: false } : current);
+  }, [setPasswordRequired, setServerSession]);
   const liveEnabled = ready && !passwordRequired;
   const { data, transportState, updatedAt, retry } = useDashboardData(
     targetUrl,
     refreshIntervalMs,
     liveEnabled,
     handleLiveConfigUpdate,
+    handleAuthRequired,
   );
   const i18n = React.useMemo(() => ({
     language,
@@ -2355,7 +2588,7 @@ function App() {
           <RuntimePanel metrics={metrics} heap={heap} />
         </section>
         <LongHistoryPanel targetUrl={targetUrl} metrics={metrics} ports={metrics.ports} updatedAt={updatedAt} />
-        <DiagnosticsDeck heap={heap} history={history} machineInfo={machineInfo} metrics={metrics} />
+        <DiagnosticsDeck heap={heap} history={history} machineInfo={machineInfo} metrics={metrics} targetUrl={targetUrl} />
       </main>
     </I18nContext.Provider>
   );
