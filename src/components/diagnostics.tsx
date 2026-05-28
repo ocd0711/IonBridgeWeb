@@ -23,12 +23,14 @@ export function DiagnosticsDeck({
   history,
   machineInfo,
   targetUrl,
+  deviceKey,
 }: {
   metrics: Metrics;
   heap: HeapMetrics;
   history: PortHistory;
   machineInfo: MachineInfo;
   targetUrl: string;
+  deviceKey?: string | null;
 }) {
   const { t } = useI18n();
   const [activeTab, setActiveTab] = React.useState<"info" | "heap" | "ports">("ports");
@@ -72,6 +74,7 @@ export function DiagnosticsDeck({
             ports={metrics.ports}
             selectedPort={selectedPort}
             selectedPortId={selectedPortId}
+            deviceKey={deviceKey}
             targetUrl={targetUrl}
             onSelectPort={setSelectedPortId}
           />
@@ -159,6 +162,7 @@ function PortHistoryExplorer({
   history,
   selectedPort,
   selectedPortId,
+  deviceKey,
   targetUrl,
   onSelectPort,
 }: {
@@ -166,6 +170,7 @@ function PortHistoryExplorer({
   history: PortHistory;
   selectedPort: PortMetrics | null;
   selectedPortId: number | null;
+  deviceKey?: string | null;
   targetUrl: string;
   onSelectPort: (id: number | null) => void;
 }) {
@@ -193,6 +198,7 @@ function PortHistoryExplorer({
     setServerStatus("loading");
     fetchServerHistory({
       targetUrl,
+      deviceKey,
       hours: rangeMode === "preset" ? hours : undefined,
       start,
       end,
@@ -211,7 +217,7 @@ function PortHistoryExplorer({
     return () => {
       alive = false;
     };
-  }, [targetUrl, selectedPortId, hours, rangeMode, customStart, customEnd, canQuery, start, end]);
+  }, [targetUrl, deviceKey, selectedPortId, hours, rangeMode, customStart, customEnd, canQuery, start, end]);
 
   const selectedSamples = selectedPort ? getPortSamples(history, selectedPort.id) : [];
   const localSeries = selectedSamples.map((sample, index) => ({

@@ -1,4 +1,5 @@
 import { normalizeTarget } from "./target-security.mjs";
+import { normalizeDeviceKey } from "./db.mjs";
 
 export function createLive({ store, getConfig, runCollector }) {
   const clients = new Set();
@@ -6,8 +7,10 @@ export function createLive({ store, getConfig, runCollector }) {
 
   function handleLive(req, res, url) {
     const config = getConfig();
-    const target = normalizeTarget(url.searchParams.get("target") ?? config.targetUrl);
-    const historyKey = store.resolveHistoryKey(target);
+    const requestedDeviceKey = normalizeDeviceKey(url.searchParams.get("device") ?? url.searchParams.get("psn"));
+    const savedDeviceTarget = requestedDeviceKey ? store.savedProxyTarget({ deviceKey: requestedDeviceKey }) : null;
+    const target = normalizeTarget(savedDeviceTarget ?? url.searchParams.get("target") ?? config.targetUrl);
+    const historyKey = requestedDeviceKey ? { deviceKey: requestedDeviceKey, target } : store.resolveHistoryKey(target);
     const savedTarget = store.getTargetByHistoryKey(historyKey, target);
     res.writeHead(200, {
       "Content-Type": "text/event-stream; charset=utf-8",
@@ -20,16 +23,19 @@ export function createLive({ store, getConfig, runCollector }) {
     res.write(": connected\n\n");
     const client = { res, deviceKey: historyKey.deviceKey, target };
     clients.add(client);
-    writeSse(res, "status", {
-      type: "status",
-      targetUrl: target,
-      status: savedTarget?.lastStatus ?? "unknown",
-      error: savedTarget?.lastError ?? null,
-      ts: Date.now(),
-      config,
-    });
     const snapshot = historyKey.deviceKey ? latestSnapshots.get(historyKey.deviceKey) : null;
-    if (snapshot) writeSse(res, "snapshot", snapshot);
+    if (snapshot) {
+      writeSse(res, "snapshot", snapshot);
+    } else {
+      writeSse(res, "status", {
+        type: "status",
+        targetUrl: target,
+        status: savedTarget?.lastStatus ?? "unknown",
+        error: savedTarget?.lastError ?? null,
+        ts: Date.now(),
+        config,
+      });
+    }
     if (!snapshot && savedTarget) runCollector(target);
     const heartbeat = setInterval(() => {
       if (!res.destroyed) res.write(": heartbeat\n\n");

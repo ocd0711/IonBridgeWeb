@@ -2,10 +2,13 @@ import { mockHeap, mockHistory, mockMachineInfo, mockMetrics } from "./mock";
 import type { HeapMetrics, MachineInfo, Metrics, PortHistory, PortMetrics } from "./types";
 
 const DEFAULT_DEVICE_TARGET = "http://192.168.217.161";
-const endpoint = (path: string, targetUrl: string) => {
+const endpoint = (path: string, targetUrl: string, deviceKey?: string | null) => {
   const normalizedTarget = normalizeDeviceTarget(targetUrl);
   if (normalizedTarget === DEFAULT_DEVICE_TARGET) {
     return `/device${path}`;
+  }
+  if (deviceKey) {
+    return `/device-proxy${path}?device=${encodeURIComponent(deviceKey)}`;
   }
   return `/device-proxy${path}?target=${encodeURIComponent(normalizedTarget)}`;
 };
@@ -182,20 +185,25 @@ export async function setActiveServerTarget(targetUrl: string) {
 
 export async function fetchServerHistory({
   targetUrl,
+  deviceKey,
   hours,
   start,
   end,
   port,
 }: {
   targetUrl: string;
+  deviceKey?: string | null;
   hours?: number;
   start?: number;
   end?: number;
   port: number | null;
 }): Promise<ServerHistoryRow[]> {
-  const params = new URLSearchParams({
-    target: normalizeDeviceTarget(targetUrl),
-  });
+  const params = new URLSearchParams();
+  if (deviceKey) {
+    params.set("device", deviceKey);
+  } else {
+    params.set("target", normalizeDeviceTarget(targetUrl));
+  }
   if (hours != null) params.set("hours", String(hours));
   if (start != null) params.set("start", String(start));
   if (end != null) params.set("end", String(end));
@@ -210,17 +218,17 @@ export async function fetchServerHistory({
   return payload.rows ?? [];
 }
 
-async function fetchRecentServerHistory(targetUrl: string): Promise<ServerHistoryRow[]> {
+async function fetchRecentServerHistory(targetUrl: string, deviceKey?: string | null): Promise<ServerHistoryRow[]> {
   try {
-    return fetchServerHistory({ targetUrl, hours: 720, port: null });
+    return fetchServerHistory({ targetUrl, deviceKey, hours: 720, port: null });
   } catch (error) {
     if (isAuthRequiredError(error)) throw error;
     return [];
   }
 }
 
-async function getJson<T>(path: string, targetUrl: string, timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> {
-  const response = await fetchWithTimeout(endpoint(path, targetUrl), timeoutMs);
+async function getJson<T>(path: string, targetUrl: string, timeoutMs = REQUEST_TIMEOUT_MS, deviceKey?: string | null): Promise<T> {
+  const response = await fetchWithTimeout(endpoint(path, targetUrl, deviceKey), timeoutMs);
   if (!response.ok) {
     throwIfUnauthorized(response);
     throw new Error(`${path} returned ${response.status}`);
@@ -228,8 +236,8 @@ async function getJson<T>(path: string, targetUrl: string, timeoutMs = REQUEST_T
   return response.json() as Promise<T>;
 }
 
-async function getMachineInfo(targetUrl: string): Promise<MachineInfo> {
-  const response = await fetchWithTimeout(endpoint("/", targetUrl), MACHINE_INFO_TIMEOUT_MS);
+async function getMachineInfo(targetUrl: string, deviceKey?: string | null): Promise<MachineInfo> {
+  const response = await fetchWithTimeout(endpoint("/", targetUrl, deviceKey), MACHINE_INFO_TIMEOUT_MS);
   if (!response.ok) {
     throwIfUnauthorized(response);
     throw new Error(`/ returned ${response.status}`);
@@ -244,11 +252,11 @@ async function getMachineInfo(targetUrl: string): Promise<MachineInfo> {
   return JSON.parse(match[1]) as MachineInfo;
 }
 
-async function getMachineInfoWithRetry(targetUrl: string, attempts = 3): Promise<MachineInfo> {
+async function getMachineInfoWithRetry(targetUrl: string, deviceKey?: string | null, attempts = 3): Promise<MachineInfo> {
   let lastError: unknown;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
-      return await getMachineInfo(targetUrl);
+      return await getMachineInfo(targetUrl, deviceKey);
     } catch (error) {
       lastError = error;
       await new Promise((resolve) => window.setTimeout(resolve, 500 * (attempt + 1)));
@@ -257,11 +265,11 @@ async function getMachineInfoWithRetry(targetUrl: string, attempts = 3): Promise
   throw lastError;
 }
 
-async function getJsonWithRetry<T>(path: string, targetUrl: string, timeoutMs: number, attempts = 4): Promise<T> {
+async function getJsonWithRetry<T>(path: string, targetUrl: string, timeoutMs: number, deviceKey?: string | null, attempts = 4): Promise<T> {
   let lastError: unknown;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
-      return await getJson<T>(path, targetUrl, timeoutMs);
+      return await getJson<T>(path, targetUrl, timeoutMs, deviceKey);
     } catch (error) {
       lastError = error;
       await new Promise((resolve) => window.setTimeout(resolve, 350 * (attempt + 1)));
@@ -280,7 +288,7 @@ async function fetchWithTimeout(url: string, timeoutMs: number): Promise<Respons
   }
 }
 
-export async function fetchDashboardData(targetUrl = DEFAULT_DEVICE_TARGET): Promise<{
+export async function fetchDashboardData(targetUrl = DEFAULT_DEVICE_TARGET, deviceKey?: string | null): Promise<{
   metrics: Metrics;
   history: PortHistory;
   heap: HeapMetrics;
@@ -289,11 +297,11 @@ export async function fetchDashboardData(targetUrl = DEFAULT_DEVICE_TARGET): Pro
 }> {
   const normalizedTarget = normalizeDeviceTarget(targetUrl);
   try {
-    const metrics = await getJsonWithRetry<Metrics>("/metrics.json", normalizedTarget, METRICS_TIMEOUT_MS);
+    const metrics = await getJsonWithRetry<Metrics>("/metrics.json", normalizedTarget, METRICS_TIMEOUT_MS, deviceKey);
     const [history, heap, machineInfo] = await Promise.all([
-      getJson<PortHistory>(`/porthistoryz?limit=${HISTORY_LIMIT}`, normalizedTarget).catch(() => liveOnlyHistory(metrics)),
-      getJson<HeapMetrics>("/heapz", normalizedTarget).catch(() => mockHeap),
-      getMachineInfoWithRetry(normalizedTarget)
+      getJson<PortHistory>(`/porthistoryz?limit=${HISTORY_LIMIT}`, normalizedTarget, REQUEST_TIMEOUT_MS, deviceKey).catch(() => liveOnlyHistory(metrics)),
+      getJson<HeapMetrics>("/heapz", normalizedTarget, REQUEST_TIMEOUT_MS, deviceKey).catch(() => mockHeap),
+      getMachineInfoWithRetry(normalizedTarget, deviceKey)
         .then((info) => {
           writeCachedMachineInfo(normalizedTarget, info);
           return info;
@@ -304,11 +312,11 @@ export async function fetchDashboardData(targetUrl = DEFAULT_DEVICE_TARGET): Pro
     return { metrics, history: mergeHistory(history, metrics, normalizedTarget), heap, machineInfo, source: "device" };
   } catch (error) {
     if (isAuthRequiredError(error)) throw error;
-    return fetchOfflineDashboardData(normalizedTarget);
+    return fetchOfflineDashboardData(normalizedTarget, deviceKey);
   }
 }
 
-export async function fetchOfflineDashboardData(targetUrl = DEFAULT_DEVICE_TARGET): Promise<{
+export async function fetchOfflineDashboardData(targetUrl = DEFAULT_DEVICE_TARGET, deviceKey?: string | null): Promise<{
   metrics: Metrics;
   history: PortHistory;
   heap: HeapMetrics;
@@ -316,7 +324,7 @@ export async function fetchOfflineDashboardData(targetUrl = DEFAULT_DEVICE_TARGE
   source: "offline" | "mock";
 }> {
   const normalizedTarget = normalizeDeviceTarget(targetUrl);
-  const rows = await fetchRecentServerHistory(normalizedTarget);
+  const rows = await fetchRecentServerHistory(normalizedTarget, deviceKey);
   if (rows.length > 0) {
     const metrics = offlineMetricsFromHistory(rows);
     const history = historyFromServerRows(rows);
@@ -337,8 +345,13 @@ export async function fetchOfflineDashboardData(targetUrl = DEFAULT_DEVICE_TARGE
   };
 }
 
-export function liveStreamUrl(targetUrl: string) {
-  const params = new URLSearchParams({ target: normalizeDeviceTarget(targetUrl) });
+export function liveStreamUrl(targetUrl: string, deviceKey?: string | null) {
+  const params = new URLSearchParams();
+  if (deviceKey) {
+    params.set("device", deviceKey);
+  } else {
+    params.set("target", normalizeDeviceTarget(targetUrl));
+  }
   return `/api/live?${params.toString()}`;
 }
 

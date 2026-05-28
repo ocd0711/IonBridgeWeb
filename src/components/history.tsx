@@ -24,6 +24,10 @@ function formatTemperatureTooltip(value: unknown) {
   return typeof value === "number" && value > 0 ? `${value.toFixed(0)}C` : "N/A";
 }
 
+function formatPowerTooltip(value: unknown) {
+  return typeof value === "number" ? `${value.toFixed(2)}W` : "N/A";
+}
+
 function getHistoryCoverageLabel(history: PortHistory, t: (key: TranslationKey) => string) {
   const samples = Math.max(...history.ports.map((port) => port.samples.length), 0);
   const minutes = Math.round((samples * history.sample_period_ms) / 60000);
@@ -51,11 +55,15 @@ function formatSampleTime(
 
 export function LongHistoryPanel({
   targetUrl,
+  deviceKey,
+  isLive,
   metrics,
   ports,
   updatedAt,
 }: {
   targetUrl: string;
+  deviceKey?: string | null;
+  isLive: boolean;
   metrics: Metrics;
   ports: PortMetrics[];
   updatedAt: Date | null;
@@ -87,6 +95,7 @@ export function LongHistoryPanel({
     setStatus("loading");
     fetchServerHistory({
       targetUrl,
+      deviceKey,
       hours: rangeMode === "preset" ? hours : undefined,
       start,
       end,
@@ -107,10 +116,10 @@ export function LongHistoryPanel({
     return () => {
       alive = false;
     };
-  }, [targetUrl, hours, rangeMode, customStart, customEnd, portFilter, canQuery, start, end]);
+  }, [targetUrl, deviceKey, hours, rangeMode, customStart, customEnd, portFilter, canQuery, start, end]);
 
   React.useEffect(() => {
-    if (!updatedAt || !canQuery) return;
+    if (!isLive || !updatedAt || !canQuery) return;
     const ts = updatedAt.getTime();
     const rangeStart = rangeMode === "custom" ? start : Date.now() - hours * 60 * 60 * 1000;
     const rangeEnd = rangeMode === "custom" ? end : Date.now() + 1000;
@@ -136,10 +145,10 @@ export function LongHistoryPanel({
     });
     setLoadedAt(new Date());
     setStatus((currentStatus) => currentStatus === "unavailable" ? currentStatus : "ready");
-  }, [targetUrl, metrics, hours, rangeMode, portFilter, updatedAt, canQuery, start, end]);
+  }, [targetUrl, isLive, metrics, hours, rangeMode, portFilter, updatedAt, canQuery, start, end]);
 
   const chartRows = React.useMemo(() => buildServerHistoryChartRows(rows), [rows]);
-  const powerValues = chartRows.map((row) => row.power);
+  const powerValues = chartRows.map((row) => row.power).filter((value): value is number => typeof value === "number");
   const avgPower = powerValues.reduce((sum, value) => sum + value, 0) / Math.max(powerValues.length, 1);
   const maxPower = powerValues.length > 0 ? Math.max(...powerValues) : 0;
   const maxTemp = maxValidTemperature(chartRows.map((row) => row.temperature));
@@ -219,7 +228,7 @@ export function LongHistoryPanel({
               />
               <Tooltip
                 contentStyle={{ border: "1px solid #2e2823", borderRadius: 8 }}
-                formatter={(value, name) => name === "temperature" ? formatTemperatureTooltip(value) : `${Number(value).toFixed(2)}W`}
+                formatter={(value, name) => name === "temperature" ? formatTemperatureTooltip(value) : formatPowerTooltip(value)}
               />
               <Area
                 dataKey="power"
@@ -232,7 +241,6 @@ export function LongHistoryPanel({
                 yAxisId="power"
               />
               <Line
-                connectNulls
                 dataKey="temperature"
                 dot={false}
                 isAnimationActive={false}
@@ -280,7 +288,7 @@ function parseDateTimeLocal(value: string) {
   return Number.isFinite(time) ? time : undefined;
 }
 
-function buildServerHistoryChartRows(rows: ServerHistoryRow[]) {
+export function buildServerHistoryChartRows(rows: ServerHistoryRow[]) {
   const bucketMs = chooseHistoryBucketMs(rows);
   const buckets = new Map<number, Map<number, { power: number; temperature: number | null }>>();
   for (const row of rows) {
@@ -296,11 +304,12 @@ function buildServerHistoryChartRows(rows: ServerHistoryRow[]) {
     buckets.set(bucket, timeline);
   }
 
-  return Array.from(buckets.entries())
+  const chartRows = Array.from(buckets.entries())
     .sort(([a], [b]) => a - b)
     .map(([ts, timeline]) => {
       const values = Array.from(timeline.values());
       return {
+        ts,
         time: new Date(ts).toLocaleString("zh-CN", {
           month: "2-digit",
           day: "2-digit",
@@ -313,6 +322,21 @@ function buildServerHistoryChartRows(rows: ServerHistoryRow[]) {
         temperature: maxValidTemperature(values.map((value) => value.temperature)),
       };
     });
+  return insertHistoryGaps(chartRows, bucketMs);
+}
+
+function insertHistoryGaps<T extends { ts: number; power: number | null; temperature: number | null }>(rows: T[], bucketMs: number) {
+  if (rows.length < 2) return rows;
+  const result: T[] = [];
+  for (const row of rows) {
+    const previous = result[result.length - 1];
+    if (previous && row.ts - previous.ts > bucketMs * 2.5) {
+      result.push({ ...previous, power: null, temperature: null });
+      result.push({ ...row, power: null, temperature: null });
+    }
+    result.push(row);
+  }
+  return result;
 }
 
 function chooseHistoryBucketMs(rows: ServerHistoryRow[]) {

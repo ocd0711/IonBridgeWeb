@@ -63,6 +63,7 @@ import {
   type Language,
 } from "./preferences";
 import type { HeapMetrics, MachineInfo, Metrics, PortMetrics, TaskMetrics } from "./types";
+import { appVersion } from "./version";
 import "./styles.css";
 
 function useServerSettings() {
@@ -86,6 +87,10 @@ function useServerSettings() {
   }, []);
 
   return { ready, passwordRequired, serverSession: session, setPasswordRequired, setServerSession: setSession };
+}
+
+function AppFooter() {
+  return <footer className="app-footer">IonBridgeWeb · Web v{appVersion}</footer>;
 }
 
 function Header({
@@ -449,6 +454,7 @@ function LoginScreen({ onLogin }: { onLogin: (session: ServerSession) => void })
           <img src="/login-product.png" alt="" />
         </aside>
       </section>
+      <AppFooter />
     </main>
   );
 }
@@ -505,6 +511,7 @@ function TargetSetupScreen({
           onApply={onApply}
         />
       </section>
+      <AppFooter />
     </main>
   );
 }
@@ -709,8 +716,11 @@ function App() {
     setServerSession((current) => current ? { ...current, authenticated: false } : current);
   }, [setPasswordRequired, setServerSession]);
   const liveEnabled = ready && !passwordRequired;
+  const activeSavedTarget = savedTargets.find((target) => target.targetUrl === normalizeDeviceTarget(targetUrl));
+  const activeDeviceKey = activeSavedTarget?.deviceKey ?? null;
   const { data, deviceStatus, transportState, updatedAt, retry } = useDashboardData(
     targetUrl,
+    activeDeviceKey,
     refreshIntervalMs,
     liveEnabled,
     handleLiveConfigUpdate,
@@ -851,6 +861,7 @@ function App() {
   }
 
   const { metrics, history, heap, machineInfo, source } = data;
+  const historyDeviceKey = activeDeviceKey ?? (machineInfo.psn && machineInfo.psn !== "unknown" ? machineInfo.psn : null);
   if (source === "mock") {
     return (
       <I18nContext.Provider value={i18n}>
@@ -910,8 +921,16 @@ function App() {
           <PowerChart history={history} />
           <RuntimePanel metrics={metrics} heap={heap} />
         </section>
-        <LongHistoryPanel targetUrl={targetUrl} metrics={metrics} ports={metrics.ports} updatedAt={updatedAt} />
-        <DiagnosticsDeck heap={heap} history={history} machineInfo={machineInfo} metrics={metrics} targetUrl={targetUrl} />
+        <LongHistoryPanel
+          targetUrl={targetUrl}
+          deviceKey={historyDeviceKey}
+          isLive={source === "device"}
+          metrics={metrics}
+          ports={metrics.ports}
+          updatedAt={updatedAt}
+        />
+        <DiagnosticsDeck heap={heap} history={history} machineInfo={machineInfo} metrics={metrics} targetUrl={targetUrl} deviceKey={historyDeviceKey} />
+        <AppFooter />
       </main>
     </I18nContext.Provider>
   );

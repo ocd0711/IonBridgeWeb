@@ -15,8 +15,13 @@ export type DashboardData = Awaited<ReturnType<typeof fetchDashboardData>>;
 export type LiveTransportState = "connecting" | "sse" | "reconnecting" | "fallback";
 export type DeviceStatus = LiveStatusEvent["status"];
 
+export function shouldHoldOfflineStatus(lastSnapshotAt: number, now: number, refreshIntervalMs: number) {
+  return Boolean(lastSnapshotAt) && now - lastSnapshotAt < refreshIntervalMs * 2.5;
+}
+
 export function useDashboardData(
   targetUrl: string,
+  deviceKey: string | null | undefined,
   refreshIntervalMs: number,
   enabled: boolean,
   onConfigUpdate?: (config: ServerSession["config"]) => void,
@@ -45,7 +50,7 @@ export function useDashboardData(
       refreshInFlight = true;
       const startedAt = Date.now();
       try {
-        const next = offlineOnly ? await fetchOfflineDashboardData(targetUrl) : await fetchDashboardData(targetUrl);
+        const next = offlineOnly ? await fetchOfflineDashboardData(targetUrl, deviceKey) : await fetchDashboardData(targetUrl, deviceKey);
         if (!alive || lastSnapshotAt > startedAt) return;
         setData(next);
         setUpdatedAt(new Date());
@@ -62,7 +67,7 @@ export function useDashboardData(
 
     const supportsLiveStream = typeof EventSource !== "undefined";
     if (supportsLiveStream) {
-      eventSource = new EventSource(liveStreamUrl(targetUrl), { withCredentials: true });
+      eventSource = new EventSource(liveStreamUrl(targetUrl, deviceKey), { withCredentials: true });
       eventSource.onopen = () => {
         if (!alive) return;
         setTransportState((current) => current === "fallback" ? current : "connecting");
@@ -86,9 +91,15 @@ export function useDashboardData(
         if (!alive) return;
         const status = JSON.parse((event as MessageEvent).data) as LiveStatusEvent;
         setTransportState((current) => lastSnapshotAt ? "sse" : current);
-        setDeviceStatus(status.status);
         if (status.config) onConfigUpdate?.(status.config);
-        if (status.status === "offline") void refresh(true);
+        if (status.status === "offline") {
+          if (!shouldHoldOfflineStatus(lastSnapshotAt, Date.now(), refreshIntervalMs)) {
+            setDeviceStatus("offline");
+          }
+          void refresh();
+          return;
+        }
+        setDeviceStatus(status.status);
       });
     }
     initialTimer = window.setTimeout(() => {
@@ -106,7 +117,7 @@ export function useDashboardData(
       window.clearTimeout(initialTimer);
       window.clearInterval(timer);
     };
-  }, [targetUrl, refreshIntervalMs, refreshToken, enabled, onConfigUpdate, onAuthRequired]);
+  }, [targetUrl, deviceKey, refreshIntervalMs, refreshToken, enabled, onConfigUpdate, onAuthRequired]);
 
   return { data, deviceStatus, transportState, updatedAt, retry: () => setRefreshToken((token) => token + 1) };
 }

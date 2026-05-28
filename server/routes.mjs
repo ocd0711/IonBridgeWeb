@@ -1,4 +1,4 @@
-import { clampInterval, requireDeviceKey } from "./db.mjs";
+import { clampInterval, normalizeDeviceKey, requireDeviceKey } from "./db.mjs";
 import { normalizeTarget } from "./target-security.mjs";
 
 export function createRoutes({
@@ -16,7 +16,9 @@ export function createRoutes({
 }) {
   async function handleHistory(url, res) {
     const config = getConfig();
-    const target = normalizeTarget(url.searchParams.get("target") ?? config.targetUrl);
+    const requestedDeviceKey = normalizeDeviceKey(url.searchParams.get("device") ?? url.searchParams.get("psn"));
+    const savedDeviceTarget = requestedDeviceKey ? store.savedProxyTarget({ deviceKey: requestedDeviceKey }) : null;
+    const target = normalizeTarget(savedDeviceTarget ?? url.searchParams.get("target") ?? config.targetUrl);
     const hours = Math.max(1, Math.min(24 * 30, Number(url.searchParams.get("hours") ?? 24)));
     const startParam = parseOptionalTimestamp(url.searchParams.get("start"));
     const endParam = parseOptionalTimestamp(url.searchParams.get("end"));
@@ -24,7 +26,7 @@ export function createRoutes({
     const now = Date.now();
     const start = startParam ?? now - hours * 60 * 60 * 1000;
     const end = endParam ?? now;
-    const historyKey = store.resolveHistoryKey(target);
+    const historyKey = requestedDeviceKey ? { deviceKey: requestedDeviceKey, target } : store.resolveHistoryKey(target);
     const rows = store.queryHistory({ ...historyKey, start, end, portFilter });
     sendJson(res, { target, deviceKey: historyKey.deviceKey, hours, start, end, rows });
   }

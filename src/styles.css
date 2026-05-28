@@ -179,6 +179,16 @@ input {
   opacity: 0.68;
 }
 
+.app-footer {
+  width: 100%;
+  padding: 18px 0 4px;
+  color: var(--muted);
+  font-family: "SF Mono", "Cascadia Code", monospace;
+  font-size: 11px;
+  font-weight: 700;
+  text-align: center;
+}
+
 .app-header {
   display: flex;
   align-items: flex-end;

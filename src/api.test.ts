@@ -4,6 +4,8 @@ import {
   AuthRequiredError,
   fetchDashboardData,
   fetchOfflineDashboardData,
+  fetchServerHistory,
+  liveStreamUrl,
   normalizeDeviceTarget,
 } from "./api";
 
@@ -32,6 +34,32 @@ describe("api target normalization", () => {
     expect(normalizeDeviceTarget("cp02.local")).toBe("http://cp02.local");
     expect(normalizeDeviceTarget("http://192.168.1.2/")).toBe("http://192.168.1.2");
     expect(normalizeDeviceTarget("https://example.test/device")).toBe("https://example.test/device");
+  });
+});
+
+describe("api device identity parameters", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("uses PSN instead of target URL for live streams when available", () => {
+    expect(liveStreamUrl("http://192.168.31.248", "psn-1")).toBe("/api/live?device=psn-1");
+  });
+
+  it("uses PSN instead of target URL for history queries when available", async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({ rows: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await fetchServerHistory({
+      targetUrl: "http://192.168.31.248",
+      deviceKey: "psn-1",
+      hours: 1,
+      port: null,
+    });
+
+    const requestUrl = String((fetchMock.mock.calls as unknown as Array<[RequestInfo | URL]>)[0][0]);
+    expect(requestUrl).toContain("/api/history?device=psn-1");
+    expect(requestUrl).not.toContain("192.168.31.248");
   });
 });
 
