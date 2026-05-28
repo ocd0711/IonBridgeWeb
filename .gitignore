@@ -5,3 +5,4 @@ data/
 preview-*.png
 .DS_Store
 .codegraph/
+docs/architecture.md
