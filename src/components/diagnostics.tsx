@@ -513,10 +513,23 @@ export function MultiMetricTrendChart({
       <h4>{title}</h4>
       <ResponsiveContainer width="100%" height={150}>
         <ComposedChart data={data} margin={{ top: 8, right: 12, left: -24, bottom: 0 }}>
-          <CartesianGrid stroke="#e6dfd4" vertical={false} />
-          <XAxis dataKey="time" tickLine={false} axisLine={false} tick={{ fill: "#766b5f", fontSize: 11 }} />
-          <YAxis domain={["auto", "auto"]} tickLine={false} axisLine={false} tick={{ fill: "#766b5f", fontSize: 11 }} />
-          <Tooltip formatter={(value, name) => [`${Number(value).toFixed(3)}${unit}`, String(name).replace(/[VA]$/, "")]} />
+          <CartesianGrid stroke="var(--chart-grid)" vertical={false} />
+          <XAxis dataKey="time" tickLine={false} axisLine={false} tick={{ fill: "var(--chart-axis)", fontSize: 11 }} />
+          <YAxis
+            domain={["auto", "auto"]}
+            tickLine={false}
+            axisLine={false}
+            tick={{ fill: "var(--chart-axis)", fontSize: 11 }}
+          />
+          <Tooltip
+            contentStyle={{
+              background: "var(--chart-tooltip-bg)",
+              border: "1px solid var(--chart-tooltip-border)",
+              borderRadius: 8,
+              color: "var(--chart-tooltip-ink)",
+            }}
+            formatter={(value, name) => [`${Number(value).toFixed(3)}${unit}`, String(name).replace(/[VA]$/, "")]}
+          />
           {keys.map((key, index) => (
             <Line
               connectNulls

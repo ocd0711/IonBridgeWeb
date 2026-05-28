@@ -396,18 +396,23 @@ export function PowerChart({ history }: { history: PortHistory }) {
               <stop offset="100%" stopColor="#f47b20" stopOpacity={0.02} />
             </linearGradient>
           </defs>
-          <CartesianGrid stroke="#e6dfd4" vertical={false} />
-          <XAxis dataKey="time" tickLine={false} axisLine={false} tick={{ fill: "#766b5f", fontSize: 12 }} />
-          <YAxis yAxisId="power" tickLine={false} axisLine={false} tick={{ fill: "#766b5f", fontSize: 12 }} />
+          <CartesianGrid stroke="var(--chart-grid)" vertical={false} />
+          <XAxis dataKey="time" tickLine={false} axisLine={false} tick={{ fill: "var(--chart-axis)", fontSize: 12 }} />
+          <YAxis yAxisId="power" tickLine={false} axisLine={false} tick={{ fill: "var(--chart-axis)", fontSize: 12 }} />
           <YAxis
             yAxisId="temperature"
             orientation="right"
             tickLine={false}
             axisLine={false}
-            tick={{ fill: "#9c4f22", fontSize: 12 }}
+            tick={{ fill: "var(--amber-deep)", fontSize: 12 }}
           />
           <Tooltip
-            contentStyle={{ border: "1px solid #2e2823", borderRadius: 8 }}
+            contentStyle={{
+              background: "var(--chart-tooltip-bg)",
+              border: "1px solid var(--chart-tooltip-border)",
+              borderRadius: 8,
+              color: "var(--chart-tooltip-ink)",
+            }}
             formatter={(value, name) => name === "temperature" ? formatTemperatureTooltip(value) : `${Number(value).toFixed(1)}W`}
           />
           {portKeys.map((key, index) => (

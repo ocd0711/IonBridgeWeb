@@ -11,6 +11,12 @@
   --amber-strong: #f36d16;
   --amber-deep: #8b3109;
   --green: #2f806c;
+  --chart-surface: rgba(255, 253, 250, 0.7);
+  --chart-grid: #e6dfd4;
+  --chart-axis: #766b5f;
+  --chart-tooltip-bg: #fffdfa;
+  --chart-tooltip-border: #2e2823;
+  --chart-tooltip-ink: #28231f;
   --shadow: 0 18px 50px rgba(68, 52, 38, 0.12);
   font-family:
     ui-sans-serif,
@@ -1559,7 +1565,7 @@ h1 {
   min-width: 0;
   border: 1px solid var(--hairline);
   border-radius: 8px;
-  background: rgba(255, 253, 250, 0.7);
+  background: var(--chart-surface);
   padding: 12px 12px 8px;
 }
 
@@ -2255,6 +2261,12 @@ h1 {
     --amber-strong: #ff761b;
     --amber-deep: #ff9b45;
     --green: #45b99d;
+    --chart-surface: rgba(22, 19, 16, 0.84);
+    --chart-grid: rgba(255, 255, 255, 0.14);
+    --chart-axis: #b8aa9b;
+    --chart-tooltip-bg: #211d19;
+    --chart-tooltip-border: #5a4d42;
+    --chart-tooltip-ink: #f7efe4;
     --shadow: 0 18px 50px rgba(0, 0, 0, 0.36);
     background: var(--paper);
     color: var(--ink);
@@ -2283,7 +2295,8 @@ h1 {
   .target-control,
   .saved-target-trigger,
   .saved-target-menu,
-  .history-filters label {
+  .history-filters label,
+  .metric-trend-card {
     background: rgba(36, 31, 26, 0.92);
     border-color: #463d34;
     box-shadow: 0 1px 0 rgba(255, 255, 255, 0.04) inset;
