@@ -87,12 +87,18 @@ http://localhost:18318/
 ```yaml
 environment:
   IONBRIDGE_RETENTION_DAYS: "30"
+  IONBRIDGE_ALLOWED_TARGETS: "192.168.0.0/16,10.0.0.0/8,172.16.0.0/12,*.local"
+  IONBRIDGE_ALLOW_TARGET_REDIRECTS: "false"
+  IONBRIDGE_MAX_TARGET_REDIRECTS: "0"
   IONBRIDGE_PASSWORD: "change-me"
 volumes:
   - ./data:/data
 ```
 
 - `IONBRIDGE_RETENTION_DAYS`: 服务端历史保留天数，默认 30 天。
+- `IONBRIDGE_ALLOWED_TARGETS`: 允许访问的目标设备地址范围，支持 IPv4 CIDR、精确 host 和 `*.local` 通配，默认 `192.168.0.0/16,10.0.0.0/8,172.16.0.0/12,*.local`。
+- `IONBRIDGE_ALLOW_TARGET_REDIRECTS`: 是否允许目标设备请求跟随 HTTP redirect，默认 `false`。
+- `IONBRIDGE_MAX_TARGET_REDIRECTS`: 允许 redirect 时的最大跳转次数，默认 `0`，最大 `5`。
 - `IONBRIDGE_PASSWORD`: 设置后启用登录保护；不设置则不要求登录。
 - `/data`: 持久化配置和历史数据。
 
@@ -128,6 +134,8 @@ cp02s-1027249302340842.local
 Docker/生产服务模式下，所有已保存设备都会被后台同时采集。页面顶部会显示已保存设备下拉列表，可以点击切换当前查看设备，也可以移除设备。移除设备会按 PSN 删除该设备和对应历史样本。
 
 生产服务的 `/device-proxy` 只会代理 SQLite 中已经保存的设备。推荐使用 `device` 或 `psn` 参数按设备 PSN 解析当前地址；旧的 `target` 参数也必须完全匹配已保存设备地址，否则会返回 `403`，避免服务端被当成任意 HTTP 代理。
+
+服务端访问目标设备前会执行目标地址校验。默认只允许 `http://` 下的 RFC1918 局域网地址和 `*.local`，并禁止自动跟随 redirect。需要特殊网段或固定 host 时，可以通过 `IONBRIDGE_ALLOWED_TARGETS` 增加规则。
 
 目标当前连不上但 SQLite 里已有历史样本时，页面仍会进入监控面板，实时状态显示为 `离线`，历史图表和长时间筛选继续可用。只有当前地址既连不上、又没有任何历史样本时，才会进入目标地址配置页。
 
