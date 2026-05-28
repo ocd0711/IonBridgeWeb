@@ -7,6 +7,7 @@ import {
   Filter,
   Gauge,
   HardDrive,
+  Pencil,
   Radio,
   RefreshCw,
   Settings,
@@ -34,6 +35,7 @@ import {
   saveServerConfig,
   setActiveServerTarget,
   deleteSavedTarget,
+  updateSavedTargetNote,
   type LiveDashboardSnapshot,
   type LiveStatusEvent,
   type SavedTarget,
@@ -83,8 +85,11 @@ const translations = {
     realtimeSummary: "实时摘要",
     savedTargets: "已保存设备地址",
     removeTargetTitle: "移除设备和对应历史数据",
+    editTargetNote: "编辑设备备注",
     targetAddress: "设备目标地址",
+    targetNote: "设备备注",
     targetPlaceholder: "当前设备地址",
+    targetNotePlaceholder: "备注，例如书房 / 工位 / 旅行箱",
     intervalSeconds: "采集间隔，单位秒",
     validatingDevice: "正在验证设备...",
     saveConfig: "保存配置",
@@ -213,8 +218,11 @@ const translations = {
     realtimeSummary: "Realtime summary",
     savedTargets: "Saved device targets",
     removeTargetTitle: "Remove this device and its history",
+    editTargetNote: "Edit device note",
     targetAddress: "Device target address",
+    targetNote: "Device note",
     targetPlaceholder: "Current device address",
+    targetNotePlaceholder: "Note, e.g. desk / lab / travel kit",
     intervalSeconds: "Collection interval in seconds",
     validatingDevice: "Verifying device...",
     saveConfig: "Save config",
@@ -563,6 +571,7 @@ function Header({
   onApply,
   onSelectSavedTarget,
   onDeleteTarget,
+  onUpdateTargetNote,
   connectionActionPending,
 }: {
   metrics: Metrics;
@@ -573,9 +582,10 @@ function Header({
   targetUrl: string;
   refreshIntervalMs: number;
   savedTargets: SavedTarget[];
-  onApply: (targetUrl: string, refreshIntervalMs: number) => void | Promise<void>;
+  onApply: (targetUrl: string, refreshIntervalMs: number, note: string) => void | Promise<void>;
   onSelectSavedTarget: (target: SavedTarget) => void | Promise<void>;
   onDeleteTarget: (targetUrl: string) => void | Promise<void>;
+  onUpdateTargetNote: (target: SavedTarget, note: string) => void | Promise<void>;
   connectionActionPending?: boolean;
 }) {
   const { language, t } = useI18n();
@@ -588,6 +598,7 @@ function Header({
   const productEyebrow = profile.family === "CP02"
     ? `CP-02 ${profile.variant.toUpperCase()}`
     : `${profile.family} Mirror ${profile.variant.toUpperCase()}`;
+  const activeNote = savedTargets.find((target) => target.targetUrl === normalizeDeviceTarget(targetUrl))?.note ?? "";
 
   return (
     <>
@@ -624,6 +635,7 @@ function Header({
             targets={savedTargets}
             onSelect={onSelectSavedTarget}
             onDelete={onDeleteTarget}
+            onUpdateNote={onUpdateTargetNote}
           />
           <LanguageToggle />
           <button
@@ -647,6 +659,7 @@ function Header({
           <DeviceTargetControl
             disabled={connectionActionPending}
             busy={connectionActionPending}
+            note={activeNote}
             refreshIntervalMs={refreshIntervalMs}
             targetUrl={targetUrl}
             onApply={onApply}
@@ -663,23 +676,42 @@ function SavedTargetsMenu({
   targets,
   onSelect,
   onDelete,
+  onUpdateNote,
 }: {
   activeTargetUrl: string;
   disabled?: boolean;
   targets: SavedTarget[];
   onSelect: (target: SavedTarget) => void | Promise<void>;
   onDelete: (targetUrl: string) => void | Promise<void>;
+  onUpdateNote: (target: SavedTarget, note: string) => void | Promise<void>;
 }) {
   const { language, t } = useI18n();
   const [isDeleting, setIsDeleting] = React.useState("");
   const [isOpen, setIsOpen] = React.useState(false);
+  const menuRef = React.useRef<HTMLDivElement | null>(null);
+  React.useEffect(() => {
+    if (!isOpen) return;
+    function handlePointerDown(event: PointerEvent) {
+      if (menuRef.current?.contains(event.target as Node)) return;
+      setIsOpen(false);
+    }
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") setIsOpen(false);
+    }
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isOpen]);
   if (targets.length === 0) return null;
   const normalizedActive = normalizeDeviceTarget(activeTargetUrl);
   const activeTarget = targets.find((target) => target.targetUrl === normalizedActive) ?? targets[0];
-  const activeName = activeTarget.deviceKey ?? activeTarget.targetUrl.replace(/^https?:\/\//, "");
+  const activeName = activeTarget.note || activeTarget.deviceKey || activeTarget.targetUrl.replace(/^https?:\/\//, "");
 
   return (
-    <div className="saved-targets">
+    <div className="saved-targets" ref={menuRef}>
       <button
         aria-expanded={isOpen}
         className="saved-target-trigger"
@@ -697,7 +729,7 @@ function SavedTargetsMenu({
         <div className="saved-target-menu" aria-label={t("savedTargets")}>
           {targets.map((target) => {
             const isActive = normalizedActive === target.targetUrl;
-            const name = target.deviceKey ?? target.targetUrl.replace(/^https?:\/\//, "");
+            const name = target.note || target.deviceKey || target.targetUrl.replace(/^https?:\/\//, "");
             return (
               <div className={`saved-target ${isActive ? "active" : ""}`} key={target.targetUrl}>
                 <button
@@ -714,9 +746,23 @@ function SavedTargetsMenu({
                   <span className={`saved-target-dot ${target.lastStatus}`} />
                   <span className="saved-target-copy">
                     <strong>{name}</strong>
-                    <small>{target.targetUrl}</small>
+                    <small>{target.note ? `${target.deviceKey ?? ""} · ${target.targetUrl}` : target.targetUrl}</small>
                   </span>
                   <em>{targetStatusLabel(language, target.lastStatus)}</em>
+                </button>
+                <button
+                  className="saved-target-note"
+                  disabled={disabled}
+                  type="button"
+                  onClick={async () => {
+                    if (disabled) return;
+                    const nextNote = window.prompt(t("targetNote"), target.note ?? "");
+                    if (nextNote == null) return;
+                    await onUpdateNote(target, nextNote);
+                  }}
+                  title={t("editTargetNote")}
+                >
+                  <Pencil size={14} />
                 </button>
                 <button
                   className="saved-target-delete"
@@ -746,19 +792,22 @@ function SavedTargetsMenu({
 
 function DeviceTargetControl({
   targetUrl,
+  note = "",
   refreshIntervalMs,
   disabled = false,
   busy = false,
   onApply,
 }: {
   targetUrl: string;
+  note?: string;
   refreshIntervalMs: number;
   disabled?: boolean;
   busy?: boolean;
-  onApply: (targetUrl: string, refreshIntervalMs: number) => void | Promise<void>;
+  onApply: (targetUrl: string, refreshIntervalMs: number, note: string) => void | Promise<void>;
 }) {
   const { t } = useI18n();
   const [draft, setDraft] = React.useState(targetUrl);
+  const [noteDraft, setNoteDraft] = React.useState(note);
   const [intervalDraft, setIntervalDraft] = React.useState(String(refreshIntervalMs / 1000));
   const [isApplying, setIsApplying] = React.useState(false);
   const [error, setError] = React.useState("");
@@ -766,6 +815,10 @@ function DeviceTargetControl({
   React.useEffect(() => {
     setDraft(targetUrl);
   }, [targetUrl]);
+
+  React.useEffect(() => {
+    setNoteDraft(note);
+  }, [note]);
 
   React.useEffect(() => {
     setIntervalDraft(String(refreshIntervalMs / 1000));
@@ -781,7 +834,7 @@ function DeviceTargetControl({
         setIsApplying(true);
         setError("");
         try {
-          await onApply(normalizeDeviceTarget(draft), clampRefreshInterval(Number(intervalDraft) * 1000));
+          await onApply(normalizeDeviceTarget(draft), clampRefreshInterval(Number(intervalDraft) * 1000), noteDraft);
         } catch {
           setError(t("connectFailed"));
         } finally {
@@ -795,6 +848,15 @@ function DeviceTargetControl({
         value={draft}
         onChange={(event) => setDraft(event.target.value)}
         placeholder={t("targetPlaceholder")}
+      />
+      <input
+        aria-label={t("targetNote")}
+        className="target-note-input"
+        disabled={isApplying || disabled}
+        value={noteDraft}
+        maxLength={80}
+        onChange={(event) => setNoteDraft(event.target.value)}
+        placeholder={t("targetNotePlaceholder")}
       />
       <input
         aria-label={t("intervalSeconds")}
@@ -869,18 +931,21 @@ function TargetSetupScreen({
   onApply,
   onSelectSavedTarget,
   onDeleteTarget,
+  onUpdateTargetNote,
 }: {
   targetUrl: string;
   refreshIntervalMs: number;
   savedTargets?: SavedTarget[];
   state?: "connecting" | "offline";
   connectionActionPending?: boolean;
-  onApply: (targetUrl: string, refreshIntervalMs: number) => void | Promise<void>;
+  onApply: (targetUrl: string, refreshIntervalMs: number, note: string) => void | Promise<void>;
   onSelectSavedTarget: (target: SavedTarget) => void | Promise<void>;
   onDeleteTarget?: (targetUrl: string) => void | Promise<void>;
+  onUpdateTargetNote: (target: SavedTarget, note: string) => void | Promise<void>;
 }) {
   const { t } = useI18n();
   const isConnecting = state === "connecting";
+  const activeNote = savedTargets.find((target) => target.targetUrl === normalizeDeviceTarget(targetUrl))?.note ?? "";
   return (
     <main className="target-setup-screen">
       <section className="target-setup-card">
@@ -898,10 +963,12 @@ function TargetSetupScreen({
           targets={savedTargets}
           onSelect={onSelectSavedTarget}
           onDelete={onDeleteTarget ?? (() => undefined)}
+          onUpdateNote={onUpdateTargetNote}
         />
         <DeviceTargetControl
           disabled={connectionActionPending || isConnecting}
           busy={connectionActionPending || isConnecting}
+          note={activeNote}
           refreshIntervalMs={refreshIntervalMs}
           targetUrl={targetUrl}
           onApply={onApply}
@@ -2077,6 +2144,7 @@ function App() {
   const [language, setLanguageState] = React.useState<Language>(readLanguage);
   const [targetUrl, setTargetUrl] = React.useState(readDeviceTarget);
   const [refreshIntervalMs, setRefreshIntervalMs] = React.useState(readRefreshInterval);
+  const [showAppearanceSwitcher, setShowAppearanceSwitcher] = React.useState(false);
   const [savedTargets, setSavedTargets] = React.useState<SavedTarget[]>([]);
   const { ready, passwordRequired, serverSession, setPasswordRequired, setServerSession } = useServerSettings();
   const [activeProfileKey, setActiveProfileKey] = React.useState<string | null>(null);
@@ -2084,6 +2152,7 @@ function App() {
   const connectionActionPendingRef = React.useRef(false);
   const handleLiveConfigUpdate = React.useCallback((nextConfig: ServerSession["config"]) => {
     setSavedTargets(nextConfig.targets);
+    setShowAppearanceSwitcher(Boolean(nextConfig.showAppearanceSwitcher));
   }, []);
   const liveEnabled = ready && !passwordRequired;
   const { data, transportState, updatedAt, retry } = useDashboardData(
@@ -2113,10 +2182,10 @@ function App() {
     }
   }
 
-  async function handleConnectionSettingsApply(nextTargetUrl: string, nextRefreshIntervalMs: number) {
+  async function handleConnectionSettingsApply(nextTargetUrl: string, nextRefreshIntervalMs: number, note: string) {
     await runConnectionAction(async () => {
       const clamped = clampRefreshInterval(nextRefreshIntervalMs);
-      const saved = await saveServerConfig({ targetUrl: nextTargetUrl, refreshIntervalMs: clamped });
+      const saved = await saveServerConfig({ targetUrl: nextTargetUrl, refreshIntervalMs: clamped, note });
       const savedTarget = normalizeDeviceTarget(saved.targetUrl);
       const savedInterval = clampRefreshInterval(saved.refreshIntervalMs);
       setActiveProfileKey(null);
@@ -2126,6 +2195,13 @@ function App() {
       writeDeviceTarget(savedTarget);
       writeRefreshInterval(savedInterval);
       retry();
+    });
+  }
+
+  async function handleSavedTargetNoteUpdate(target: SavedTarget, note: string) {
+    await runConnectionAction(async () => {
+      const saved = await updateSavedTargetNote({ targetUrl: target.targetUrl, deviceKey: target.deviceKey, note });
+      setSavedTargets(saved.targets);
     });
   }
 
@@ -2167,6 +2243,7 @@ function App() {
     if (!serverSession || !serverSession.authenticated) return;
     const serverInterval = clampRefreshInterval(serverSession.config.refreshIntervalMs);
     setSavedTargets(serverSession.config.targets);
+    setShowAppearanceSwitcher(Boolean(serverSession.config.showAppearanceSwitcher));
     setRefreshIntervalMs(serverInterval);
     writeRefreshInterval(serverInterval);
     if (serverSession.config.targetUrl) {
@@ -2212,6 +2289,7 @@ function App() {
           onApply={handleConnectionSettingsApply}
           onSelectSavedTarget={handleSavedTargetSelect}
           onDeleteTarget={handleDeleteSavedTarget}
+          onUpdateTargetNote={handleSavedTargetNoteUpdate}
         />
       </I18nContext.Provider>
     );
@@ -2229,6 +2307,7 @@ function App() {
           onApply={handleConnectionSettingsApply}
           onSelectSavedTarget={handleSavedTargetSelect}
           onDeleteTarget={handleDeleteSavedTarget}
+          onUpdateTargetNote={handleSavedTargetNoteUpdate}
         />
       </I18nContext.Provider>
     );
@@ -2236,7 +2315,7 @@ function App() {
 
   const detectedProfile = resolveDeviceProfile(machineInfo, metrics.ports);
   const activeProfile =
-    deviceProfiles.find((profile) => profile.key === (activeProfileKey ?? detectedProfile.key)) ??
+    deviceProfiles.find((profile) => profile.key === (showAppearanceSwitcher ? activeProfileKey ?? detectedProfile.key : detectedProfile.key)) ??
     detectedProfile;
 
   return (
@@ -2255,13 +2334,16 @@ function App() {
           onApply={handleConnectionSettingsApply}
           onSelectSavedTarget={handleSavedTargetSelect}
           onDeleteTarget={handleDeleteSavedTarget}
+          onUpdateTargetNote={handleSavedTargetNoteUpdate}
         />
         <DeviceFace history={history} metrics={metrics} profile={activeProfile} />
-        <ProfileSwitcher
-          activeProfile={activeProfile}
-          detectedProfile={detectedProfile}
-          onChange={(profile) => setActiveProfileKey(profile.key)}
-        />
+        {showAppearanceSwitcher ? (
+          <ProfileSwitcher
+            activeProfile={activeProfile}
+            detectedProfile={detectedProfile}
+            onChange={(profile) => setActiveProfileKey(profile.key)}
+          />
+        ) : null}
         <SummaryStrip heap={heap} metrics={metrics} profile={activeProfile} />
         <section className="ports-grid" aria-label={i18n.t("portTelemetry")}>
           {metrics.ports.map((port) => (

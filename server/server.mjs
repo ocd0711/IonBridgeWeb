@@ -27,6 +27,7 @@ const allowTargetRedirects = process.env.IONBRIDGE_ALLOW_TARGET_REDIRECTS === "t
 const maxTargetRedirects = allowTargetRedirects
   ? Math.max(0, Math.min(5, Number(process.env.IONBRIDGE_MAX_TARGET_REDIRECTS ?? 3)))
   : 0;
+const showAppearanceSwitcher = process.env.IONBRIDGE_SHOW_APPEARANCE_SWITCHER === "true";
 const sessions = new Map();
 const loginFailures = new Map();
 
@@ -75,6 +76,7 @@ const server = createServer(async (req, res) => {
     if (url.pathname === "/api/targets") {
       if (req.method === "GET") return sendJson(res, { targets: listTargets(), activeTargetUrl: config.targetUrl });
       if (req.method === "POST") return handleSetActiveTarget(req, res);
+      if (req.method === "PATCH") return handleUpdateTarget(req, res);
       if (req.method === "DELETE") return handleDeleteTarget(url, res);
     }
 
@@ -104,6 +106,7 @@ async function loadConfig() {
   return {
     targetUrl: activeEntry?.targetUrl ?? "",
     refreshIntervalMs: activeEntry?.refreshIntervalMs ?? defaultIntervalMs,
+    showAppearanceSwitcher,
     targets,
   };
 }
@@ -239,6 +242,7 @@ function openDatabase(path) {
     CREATE TABLE IF NOT EXISTS targets (
       device_key TEXT PRIMARY KEY,
       target_url TEXT NOT NULL UNIQUE,
+      note TEXT NOT NULL DEFAULT '',
       refresh_interval_ms INTEGER NOT NULL DEFAULT 30000,
       last_status TEXT NOT NULL DEFAULT 'unknown',
       last_error TEXT,
@@ -248,12 +252,16 @@ function openDatabase(path) {
       updated_at INTEGER NOT NULL
     );
   `);
+  if (!tableHasRequiredColumns(database, "targets", ["note"])) {
+    database.exec("ALTER TABLE targets ADD COLUMN note TEXT NOT NULL DEFAULT ''");
+  }
   if (!targetsSchemaIsCurrent(database)) {
     database.exec(`
       DROP TABLE IF EXISTS targets_v2;
       CREATE TABLE targets_v2 (
         device_key TEXT PRIMARY KEY,
         target_url TEXT NOT NULL UNIQUE,
+        note TEXT NOT NULL DEFAULT '',
         refresh_interval_ms INTEGER NOT NULL DEFAULT 30000,
         last_status TEXT NOT NULL DEFAULT 'unknown',
         last_error TEXT,
@@ -263,10 +271,10 @@ function openDatabase(path) {
         updated_at INTEGER NOT NULL
       );
       INSERT OR REPLACE INTO targets_v2 (
-        device_key, target_url, refresh_interval_ms, last_status, last_error,
+        device_key, target_url, note, refresh_interval_ms, last_status, last_error,
         last_seen, last_sample_at, created_at, updated_at
       )
-      SELECT device_key, target_url, refresh_interval_ms,
+      SELECT device_key, target_url, COALESCE(note, ''), refresh_interval_ms,
         COALESCE(last_status, 'unknown'), last_error, last_seen, last_sample_at,
         COALESCE(NULLIF(created_at, 0), strftime('%s','now') * 1000),
         COALESCE(NULLIF(updated_at, 0), strftime('%s','now') * 1000)
@@ -313,6 +321,7 @@ function targetsSchemaIsCurrent(database) {
   return (
     names.has("device_key") &&
     names.has("target_url") &&
+    names.has("note") &&
     names.has("refresh_interval_ms") &&
     names.has("last_status") &&
     !names.has("label") &&
@@ -335,7 +344,7 @@ function setSetting(key, value) {
 function listTargets() {
   return db.prepare(`
     SELECT target_url targetUrl, refresh_interval_ms refreshIntervalMs,
-      device_key deviceKey, last_status lastStatus, last_error lastError,
+      device_key deviceKey, note, last_status lastStatus, last_error lastError,
       last_seen lastSeen, last_sample_at lastSampleAt
     FROM targets
     ORDER BY updated_at DESC, created_at DESC
@@ -345,7 +354,7 @@ function listTargets() {
   }));
 }
 
-function upsertVerifiedTarget({ deviceKey, targetUrl, refreshIntervalMs, active, status = "online", error = null }) {
+function upsertVerifiedTarget({ deviceKey, targetUrl, refreshIntervalMs, note = null, active, status = "online", error = null }) {
   const normalizedTarget = normalizeTarget(targetUrl);
   if (!normalizedTarget) throw new Error("targetUrl is required");
   const normalizedDeviceKey = normalizeDeviceKey(deviceKey);
@@ -354,11 +363,12 @@ function upsertVerifiedTarget({ deviceKey, targetUrl, refreshIntervalMs, active,
   db.prepare("DELETE FROM targets WHERE target_url = ? AND device_key != ?").run(normalizedTarget, normalizedDeviceKey);
   db.prepare(`
     INSERT INTO targets (
-      device_key, target_url, refresh_interval_ms, last_status, last_error,
+      device_key, target_url, note, refresh_interval_ms, last_status, last_error,
       last_seen, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(device_key) DO UPDATE SET
       target_url = excluded.target_url,
+      note = COALESCE(excluded.note, targets.note),
       refresh_interval_ms = excluded.refresh_interval_ms,
       last_status = excluded.last_status,
       last_error = excluded.last_error,
@@ -367,6 +377,7 @@ function upsertVerifiedTarget({ deviceKey, targetUrl, refreshIntervalMs, active,
   `).run(
     normalizedDeviceKey,
     normalizedTarget,
+    note == null ? "" : normalizeTargetNote(note),
     clampInterval(Number(refreshIntervalMs ?? defaultIntervalMs)),
     status,
     error,
@@ -453,6 +464,10 @@ function normalizeDeviceKey(value) {
   const key = String(value ?? "").trim();
   if (!key || key.toLowerCase() === "unknown") return null;
   return key;
+}
+
+function normalizeTargetNote(value) {
+  return String(value ?? "").trim().slice(0, 80);
 }
 
 function requireDeviceKey(machineInfo) {
@@ -597,7 +612,7 @@ async function handleConfig(req, res) {
         : "target connection failed; device was not saved",
     }, 422);
   }
-  upsertVerifiedTarget({ deviceKey, targetUrl, refreshIntervalMs, active: true });
+  upsertVerifiedTarget({ deviceKey, targetUrl, refreshIntervalMs, note: body.note, active: true });
   config = await loadConfig();
   startCollectors();
   sendJson(res, config);
@@ -610,6 +625,20 @@ async function handleSetActiveTarget(req, res) {
   const target = db.prepare("SELECT device_key FROM targets WHERE target_url = ?").get(targetUrl);
   if (!target?.device_key) return sendJson(res, { error: "target is not saved" }, 404);
   setSetting("active_device_key", target.device_key);
+  config = await loadConfig();
+  sendJson(res, config);
+}
+
+async function handleUpdateTarget(req, res) {
+  const body = await readJson(req);
+  const deviceKey = normalizeDeviceKey(body.deviceKey);
+  const targetUrl = normalizeTarget(body.targetUrl);
+  const note = normalizeTargetNote(body.note);
+  const now = Date.now();
+  const result = deviceKey
+    ? db.prepare("UPDATE targets SET note = ?, updated_at = ? WHERE device_key = ?").run(note, now, deviceKey)
+    : db.prepare("UPDATE targets SET note = ?, updated_at = ? WHERE target_url = ?").run(note, now, targetUrl);
+  if (result.changes === 0) return sendJson(res, { error: "target is not saved" }, 404);
   config = await loadConfig();
   sendJson(res, config);
 }

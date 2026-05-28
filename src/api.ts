@@ -33,6 +33,7 @@ export type ServerSession = {
   config: {
     targetUrl: string;
     refreshIntervalMs: number;
+    showAppearanceSwitcher?: boolean;
     targets: SavedTarget[];
   };
 };
@@ -41,6 +42,7 @@ export type SavedTarget = {
   targetUrl: string;
   refreshIntervalMs: number;
   deviceKey: string | null;
+  note: string;
   lastStatus: "online" | "offline" | "unknown";
   lastError: string | null;
   lastSeen: number | null;
@@ -101,7 +103,7 @@ export async function login(password: string): Promise<ServerSession> {
   return response.json() as Promise<ServerSession>;
 }
 
-export async function saveServerConfig(config: { targetUrl: string; refreshIntervalMs: number }) {
+export async function saveServerConfig(config: { targetUrl: string; refreshIntervalMs: number; note?: string }) {
   const response = await fetch("/api/config", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
@@ -118,6 +120,22 @@ export async function deleteSavedTarget(targetUrl: string) {
   const response = await fetch(`/api/targets?${params.toString()}`, { method: "DELETE" });
   if (!response.ok) {
     throw new Error("移除设备失败");
+  }
+  return response.json() as Promise<ServerSession["config"]>;
+}
+
+export async function updateSavedTargetNote(target: { targetUrl: string; deviceKey: string | null; note: string }) {
+  const response = await fetch("/api/targets", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      targetUrl: normalizeDeviceTarget(target.targetUrl),
+      deviceKey: target.deviceKey,
+      note: target.note,
+    }),
+  });
+  if (!response.ok) {
+    throw new Error("更新备注失败");
   }
   return response.json() as Promise<ServerSession["config"]>;
 }

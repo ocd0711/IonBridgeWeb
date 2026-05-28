@@ -401,6 +401,11 @@ h1 {
   text-align: right;
 }
 
+.target-control input.target-note-input {
+  width: 160px;
+  border-left: 1px solid var(--hairline);
+}
+
 .target-unit {
   padding-right: 8px;
   color: var(--muted);
@@ -498,7 +503,7 @@ h1 {
 
 .saved-target {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 36px;
+  grid-template-columns: minmax(0, 1fr) 36px 36px;
   min-height: 48px;
   overflow: hidden;
   border: 1px solid var(--hairline);
@@ -583,7 +588,19 @@ h1 {
   font-weight: 700;
 }
 
-.saved-target-delete:disabled {
+.saved-target-note {
+  display: grid;
+  width: 36px;
+  place-items: center;
+  border: 0;
+  border-left: 1px solid var(--hairline);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.saved-target-delete:disabled,
+.saved-target-note:disabled {
   cursor: progress;
   opacity: 0.55;
 }

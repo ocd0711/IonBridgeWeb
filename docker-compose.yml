@@ -11,6 +11,7 @@ services:
       IONBRIDGE_ALLOWED_TARGETS: "192.168.0.0/16,10.0.0.0/8,172.16.0.0/12,*.local"
       IONBRIDGE_ALLOW_TARGET_REDIRECTS: "false"
       IONBRIDGE_MAX_TARGET_REDIRECTS: "0"
+      IONBRIDGE_SHOW_APPEARANCE_SWITCHER: "false"
       # 设置后启用登录保护。
       # IONBRIDGE_PASSWORD: "change-me"
     volumes:
