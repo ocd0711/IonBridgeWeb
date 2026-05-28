@@ -63,6 +63,7 @@ import {
   type Language,
 } from "./preferences";
 import type { HeapMetrics, MachineInfo, Metrics, PortMetrics, TaskMetrics } from "./types";
+import { registerPwa } from "./pwa";
 import { appVersion } from "./version";
 import "./styles.css";
 
@@ -936,4 +937,5 @@ function App() {
   );
 }
 
+registerPwa();
 createRoot(document.getElementById("root")!).render(<App />);
