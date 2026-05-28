@@ -2,6 +2,7 @@ import React from "react";
 
 import {
   fetchDashboardData,
+  fetchOfflineDashboardData,
   isAuthRequiredError,
   liveStreamUrl,
   mergeLiveDashboardData,
@@ -36,16 +37,16 @@ export function useDashboardData(
     setTransportState("connecting");
     if (!enabled || !targetUrl.trim()) return;
 
-    async function refresh() {
+    async function refresh(offlineOnly = false) {
       if (refreshInFlight) return;
       refreshInFlight = true;
       const startedAt = Date.now();
       try {
-        const next = await fetchDashboardData(targetUrl);
+        const next = offlineOnly ? await fetchOfflineDashboardData(targetUrl) : await fetchDashboardData(targetUrl);
         if (!alive || lastSnapshotAt > startedAt) return;
         setData(next);
         setUpdatedAt(new Date());
-        if (!lastSnapshotAt || next.source !== "device") setTransportState("fallback");
+        if (offlineOnly || !lastSnapshotAt || next.source !== "device") setTransportState("fallback");
       } catch (error) {
         if (isAuthRequiredError(error)) {
           onAuthRequired?.();
@@ -78,9 +79,10 @@ export function useDashboardData(
       });
       eventSource.addEventListener("status", (event) => {
         if (!alive) return;
-        setTransportState((current) => lastSnapshotAt ? "sse" : current);
         const status = JSON.parse((event as MessageEvent).data) as LiveStatusEvent;
+        setTransportState((current) => lastSnapshotAt ? "sse" : current);
         if (status.config) onConfigUpdate?.(status.config);
+        if (status.status === "offline") void refresh(true);
       });
     }
     initialTimer = window.setTimeout(() => {

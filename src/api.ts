@@ -213,7 +213,8 @@ export async function fetchServerHistory({
 async function fetchRecentServerHistory(targetUrl: string): Promise<ServerHistoryRow[]> {
   try {
     return fetchServerHistory({ targetUrl, hours: 720, port: null });
-  } catch {
+  } catch (error) {
+    if (isAuthRequiredError(error)) throw error;
     return [];
   }
 }
@@ -303,26 +304,37 @@ export async function fetchDashboardData(targetUrl = DEFAULT_DEVICE_TARGET): Pro
     return { metrics, history: mergeHistory(history, metrics, normalizedTarget), heap, machineInfo, source: "device" };
   } catch (error) {
     if (isAuthRequiredError(error)) throw error;
-    const rows = await fetchRecentServerHistory(normalizedTarget);
-    if (rows.length > 0) {
-      const metrics = offlineMetricsFromHistory(rows);
-      const history = historyFromServerRows(rows);
-      return {
-        metrics,
-        history,
-        heap: mockHeap,
-        machineInfo: readCachedMachineInfo(normalizedTarget) ?? inferMachineInfo(metrics),
-        source: "offline",
-      };
-    }
+    return fetchOfflineDashboardData(normalizedTarget);
+  }
+}
+
+export async function fetchOfflineDashboardData(targetUrl = DEFAULT_DEVICE_TARGET): Promise<{
+  metrics: Metrics;
+  history: PortHistory;
+  heap: HeapMetrics;
+  machineInfo: MachineInfo;
+  source: "offline" | "mock";
+}> {
+  const normalizedTarget = normalizeDeviceTarget(targetUrl);
+  const rows = await fetchRecentServerHistory(normalizedTarget);
+  if (rows.length > 0) {
+    const metrics = offlineMetricsFromHistory(rows);
+    const history = historyFromServerRows(rows);
     return {
-      metrics: mockMetrics,
-      history: mockHistory,
+      metrics,
+      history,
       heap: mockHeap,
-      machineInfo: mockMachineInfo,
-      source: "mock",
+      machineInfo: readCachedMachineInfo(normalizedTarget) ?? inferMachineInfo(metrics),
+      source: "offline",
     };
   }
+  return {
+    metrics: mockMetrics,
+    history: mockHistory,
+    heap: mockHeap,
+    machineInfo: mockMachineInfo,
+    source: "mock",
+  };
 }
 
 export function liveStreamUrl(targetUrl: string) {
