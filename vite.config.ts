@@ -1,12 +1,23 @@
 import { readFileSync } from "node:fs";
+import { execSync } from "node:child_process";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
 const packageJson = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8")) as { version: string };
+const appVersion = getAppVersion();
+
+function getAppVersion() {
+  if (process.env.IONBRIDGE_WEB_VERSION) return process.env.IONBRIDGE_WEB_VERSION;
+  try {
+    return execSync("git describe --tags --always --dirty", { encoding: "utf8" }).trim();
+  } catch {
+    return packageJson.version;
+  }
+}
 
 export default defineConfig({
   define: {
-    __APP_VERSION__: JSON.stringify(packageJson.version),
+    __APP_VERSION__: JSON.stringify(appVersion),
   },
   plugins: [
     react(),

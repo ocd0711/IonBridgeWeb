@@ -26,6 +26,8 @@ jobs:
         run: npm ci
 
       - name: Build
+        env:
+          IONBRIDGE_WEB_VERSION: ${{ github.ref_name }}
         run: npm run build
 
       - name: Set up QEMU
@@ -47,6 +49,8 @@ jobs:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
+          build-args: |
+            IONBRIDGE_WEB_VERSION=${{ github.ref_name }}
           tags: |
             ghcr.io/ocd0711/ionbridge-web:latest
             ghcr.io/ocd0711/ionbridge-web:${{ github.ref_name }}

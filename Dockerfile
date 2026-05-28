@@ -1,9 +1,10 @@
 FROM node:24-alpine AS build
 WORKDIR /app
+ARG IONBRIDGE_WEB_VERSION
 COPY package*.json ./
 RUN npm ci
 COPY . .
-RUN npm run build
+RUN IONBRIDGE_WEB_VERSION="$IONBRIDGE_WEB_VERSION" npm run build
 
 FROM node:24-alpine
 WORKDIR /app
