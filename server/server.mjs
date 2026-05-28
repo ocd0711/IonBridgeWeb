@@ -16,7 +16,12 @@ const retentionDays = Math.max(1, Math.round(Number(process.env.IONBRIDGE_RETENT
 const passwordHash = process.env.IONBRIDGE_PASSWORD
   ? createHash("sha256").update(process.env.IONBRIDGE_PASSWORD).digest("hex")
   : "";
-const sessions = new Set();
+const sessionTtlMs = 7 * 24 * 60 * 60 * 1000;
+const maxLoginFailures = 5;
+const loginFailureWindowMs = 60 * 1000;
+const maxJsonBodyBytes = 64 * 1024;
+const sessions = new Map();
+const loginFailures = new Map();
 
 process.on("unhandledRejection", (error) => {
   console.warn("[ionbridge] background task failed:", error);
@@ -29,6 +34,8 @@ let config = {
 };
 const collectorTimers = new Map();
 const collectingTargets = new Set();
+const liveClients = new Set();
+const latestSnapshots = new Map();
 let lastPruneAt = 0;
 
 await mkdir(dataDir, { recursive: true });
@@ -40,6 +47,7 @@ startCollectors();
 const server = createServer(async (req, res) => {
   try {
     const url = new URL(req.url ?? "/", "http://localhost");
+    applySecurityHeaders(res);
 
     if (url.pathname === "/health") return sendJson(res, { ok: true });
     if (url.pathname === "/api/session") return sendJson(res, sessionPayload(req));
@@ -64,10 +72,17 @@ const server = createServer(async (req, res) => {
     }
 
     if (url.pathname === "/api/history") return handleHistory(url, res);
+    if (url.pathname === "/api/live") return handleLive(req, res, url);
     if (url.pathname.startsWith("/device-proxy")) return proxyRequest(req, res, url);
     if (url.pathname.startsWith("/device")) return proxyCurrentTarget(req, res, url);
     return serveStatic(url, res);
   } catch (error) {
+    if (error instanceof Error && error.message === "request body too large") {
+      return sendJson(res, { error: error.message }, 413);
+    }
+    if (error instanceof SyntaxError) {
+      return sendJson(res, { error: "invalid json" }, 400);
+    }
     sendJson(res, { error: error instanceof Error ? error.message : "server error" }, 500);
   }
 });
@@ -109,7 +124,10 @@ async function collectOnce(targetUrl) {
   try {
     const machineInfo = await fetchMachineInfo(normalizedTarget);
     const deviceKey = requireDeviceKey(machineInfo);
-    const metrics = await fetchJson(new URL("/metrics.json", normalizedTarget).toString(), 8000);
+    const [metrics, heap] = await Promise.all([
+      fetchJson(new URL("/metrics.json", normalizedTarget).toString(), 8000),
+      fetchJson(new URL("/heapz", normalizedTarget).toString(), 3500).catch(() => null),
+    ]);
     const ts = Date.now();
     markTargetStatus(deviceKey, "online", null, { seenAt: ts });
     insertSamples(metrics.ports.map((port) => ({
@@ -125,8 +143,30 @@ async function collectOnce(targetUrl) {
       protocol: port.fc_protocol,
     })));
     pruneHistory(ts);
+    config = await loadConfig();
+    const snapshot = {
+      type: "snapshot",
+      deviceKey,
+      targetUrl: normalizedTarget,
+      ts,
+      metrics,
+      heap,
+      machineInfo,
+      config,
+    };
+    latestSnapshots.set(deviceKey, snapshot);
+    broadcastLive(snapshot);
   } catch {
     markTargetStatusByTarget(normalizedTarget, "offline", "target unreachable");
+    config = await loadConfig();
+    broadcastLive({
+      type: "status",
+      targetUrl: normalizedTarget,
+      status: "offline",
+      error: "target unreachable",
+      ts: Date.now(),
+      config,
+    });
   } finally {
     config = await loadConfig();
     collectingTargets.delete(normalizedTarget);
@@ -435,6 +475,70 @@ async function handleHistory(url, res) {
   sendJson(res, { target, deviceKey: historyKey.deviceKey, hours, start, end, rows });
 }
 
+function handleLive(req, res, url) {
+  const target = normalizeTarget(url.searchParams.get("target") ?? config.targetUrl);
+  const historyKey = resolveHistoryKey(target);
+  const savedTarget = getTargetByHistoryKey(historyKey, target);
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream; charset=utf-8",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no",
+  });
+  res.flushHeaders?.();
+  res.write("retry: 3000\n");
+  res.write(": connected\n\n");
+  const client = { res, deviceKey: historyKey.deviceKey, target };
+  liveClients.add(client);
+  writeSse(res, "status", {
+    type: "status",
+    targetUrl: target,
+    status: savedTarget?.lastStatus ?? "unknown",
+    error: savedTarget?.lastError ?? null,
+    ts: Date.now(),
+    config,
+  });
+  const snapshot = historyKey.deviceKey ? latestSnapshots.get(historyKey.deviceKey) : null;
+  if (snapshot) writeSse(res, "snapshot", snapshot);
+  if (!snapshot && savedTarget) runCollector(target);
+  const heartbeat = setInterval(() => {
+    if (!res.destroyed) res.write(": heartbeat\n\n");
+  }, 25000);
+  req.on("close", () => {
+    clearInterval(heartbeat);
+    liveClients.delete(client);
+  });
+}
+
+function getTargetByHistoryKey(historyKey, target) {
+  if (historyKey.deviceKey) {
+    return db.prepare(`
+      SELECT last_status lastStatus, last_error lastError
+      FROM targets
+      WHERE device_key = ?
+    `).get(historyKey.deviceKey);
+  }
+  return db.prepare(`
+    SELECT last_status lastStatus, last_error lastError
+    FROM targets
+    WHERE target_url = ?
+  `).get(target);
+}
+
+function broadcastLive(payload) {
+  for (const client of liveClients) {
+    if (client.deviceKey && payload.deviceKey && client.deviceKey !== payload.deviceKey) continue;
+    if (!client.deviceKey && payload.targetUrl && client.target !== payload.targetUrl) continue;
+    writeSse(client.res, payload.type ?? "message", payload);
+  }
+}
+
+function writeSse(res, event, payload) {
+  if (res.destroyed) return;
+  res.write(`event: ${event}\n`);
+  res.write(`data: ${JSON.stringify(payload)}\n\n`);
+}
+
 function parseOptionalTimestamp(value) {
   if (value == null || value === "") return undefined;
   const parsed = Number(value);
@@ -528,20 +632,27 @@ async function handleDeleteTarget(url, res) {
 }
 
 async function handleLogin(req, res) {
+  pruneExpiredSessions();
+  const clientAddress = clientAddressOf(req);
+  if (isLoginRateLimited(clientAddress)) {
+    return sendJson(res, { error: "too many login attempts" }, 429);
+  }
   const body = await readJson(req);
   if (!passwordHash || verifyPassword(body.password ?? "")) {
     const session = randomBytes(24).toString("hex");
-    sessions.add(session);
-    res.setHeader("Set-Cookie", `ionbridge_session=${session}; Path=/; HttpOnly; SameSite=Lax`);
+    sessions.set(session, Date.now() + sessionTtlMs);
+    loginFailures.delete(clientAddress);
+    res.setHeader("Set-Cookie", sessionCookie(req, session));
     return sendJson(res, sessionPayload({ headers: { cookie: `ionbridge_session=${session}` } }));
   }
+  recordLoginFailure(clientAddress);
   sendJson(res, { error: "invalid password" }, 401);
 }
 
 function handleLogout(req, res) {
   const session = getCookie(req, "ionbridge_session");
   if (session) sessions.delete(session);
-  res.setHeader("Set-Cookie", "ionbridge_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0");
+  res.setHeader("Set-Cookie", clearSessionCookie(req));
   sendJson(res, { ok: true });
 }
 
@@ -561,12 +672,24 @@ async function proxyCurrentTarget(req, res, url) {
 }
 
 async function proxyRequest(req, res, url) {
-  const target = url.searchParams.get("target");
-  if (!target) return sendJson(res, { error: "missing target" }, 400);
+  const target = resolveSavedProxyTarget(url);
+  if (!target) return sendJson(res, { error: "target is not saved" }, 403);
   url.searchParams.delete("target");
+  url.searchParams.delete("device");
+  url.searchParams.delete("psn");
   const path = url.pathname.replace(/^\/device-proxy/, "") || "/";
-  const targetUrl = new URL(`${path}${url.search}`, normalizeTarget(target));
+  const targetUrl = new URL(`${path}${url.search}`, target);
   return proxyFetch(req, res, targetUrl);
+}
+
+function resolveSavedProxyTarget(url) {
+  const deviceKey = normalizeDeviceKey(url.searchParams.get("device") ?? url.searchParams.get("psn"));
+  if (deviceKey) {
+    return db.prepare("SELECT target_url FROM targets WHERE device_key = ?").get(deviceKey)?.target_url ?? null;
+  }
+  const target = normalizeTarget(url.searchParams.get("target"));
+  if (!target) return null;
+  return db.prepare("SELECT target_url FROM targets WHERE target_url = ?").get(target)?.target_url ?? null;
 }
 
 async function proxyFetch(req, res, targetUrl) {
@@ -621,7 +744,12 @@ async function fetchText(url, timeoutMs) {
 
 async function readJson(req) {
   const chunks = [];
-  for await (const chunk of req) chunks.push(chunk);
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > maxJsonBodyBytes) throw new Error("request body too large");
+    chunks.push(chunk);
+  }
   if (chunks.length === 0) return {};
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }
@@ -636,6 +764,26 @@ function sendText(res, text, status = 200) {
   res.statusCode = status;
   res.setHeader("Content-Type", "text/plain; charset=utf-8");
   res.end(text);
+}
+
+function applySecurityHeaders(res) {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
+  res.setHeader(
+    "Content-Security-Policy",
+    [
+      "default-src 'self'",
+      "script-src 'self'",
+      "style-src 'self' 'unsafe-inline'",
+      "img-src 'self' data:",
+      "connect-src 'self'",
+      "font-src 'self'",
+      "object-src 'none'",
+      "base-uri 'self'",
+      "frame-ancestors 'none'",
+    ].join("; "),
+  );
 }
 
 function normalizeTarget(target) {
@@ -656,7 +804,72 @@ function verifyPassword(password) {
 
 function isAuthenticated(req) {
   const session = getCookie(req, "ionbridge_session");
-  return Boolean(session && sessions.has(session));
+  if (!session) return false;
+  const expiresAt = sessions.get(session);
+  if (!expiresAt) return false;
+  if (Date.now() > expiresAt) {
+    sessions.delete(session);
+    return false;
+  }
+  return true;
+}
+
+function pruneExpiredSessions() {
+  const now = Date.now();
+  for (const [session, expiresAt] of sessions) {
+    if (now > expiresAt) sessions.delete(session);
+  }
+}
+
+function isLoginRateLimited(clientAddress) {
+  const entry = loginFailures.get(clientAddress);
+  if (!entry) return false;
+  if (Date.now() > entry.resetAt) {
+    loginFailures.delete(clientAddress);
+    return false;
+  }
+  return entry.count >= maxLoginFailures;
+}
+
+function recordLoginFailure(clientAddress) {
+  const now = Date.now();
+  const current = loginFailures.get(clientAddress);
+  const next = current && now <= current.resetAt
+    ? { count: current.count + 1, resetAt: current.resetAt }
+    : { count: 1, resetAt: now + loginFailureWindowMs };
+  loginFailures.set(clientAddress, next);
+}
+
+function sessionCookie(req, session) {
+  const attributes = [
+    `ionbridge_session=${session}`,
+    "Path=/",
+    "HttpOnly",
+    "SameSite=Lax",
+    `Max-Age=${Math.floor(sessionTtlMs / 1000)}`,
+  ];
+  if (isHttpsRequest(req)) attributes.push("Secure");
+  return attributes.join("; ");
+}
+
+function clearSessionCookie(req) {
+  const attributes = [
+    "ionbridge_session=",
+    "Path=/",
+    "HttpOnly",
+    "SameSite=Lax",
+    "Max-Age=0",
+  ];
+  if (isHttpsRequest(req)) attributes.push("Secure");
+  return attributes.join("; ");
+}
+
+function isHttpsRequest(req) {
+  return req.headers["x-forwarded-proto"] === "https";
+}
+
+function clientAddressOf(req) {
+  return req.socket.remoteAddress ?? "unknown";
 }
 
 function getCookie(req, name) {
