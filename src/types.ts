@@ -8,7 +8,7 @@ export type PortMetrics = {
   fc_protocol: number;
   current: number;
   voltage: number;
-  die_temperature: number;
+  die_temperature?: number;
   vin_value: number;
   session_id: number;
   session_charge: number;

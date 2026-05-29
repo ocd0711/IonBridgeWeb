@@ -29,8 +29,11 @@ import {
 } from "./deviceProfiles";
 import {
   amps,
+  formatTemperature,
   formatDuration,
+  formatResetReason,
   kilobytes,
+  maxTemperature,
   milliwattHours,
   portLabel,
   protocolName,
@@ -128,7 +131,7 @@ function Header({
   const { language, t } = useI18n();
   const [settingsOpen, setSettingsOpen] = React.useState(false);
   const totalPower = metrics.ports.reduce((sum, port) => sum + watts(port), 0);
-  const hottest = Math.max(...metrics.ports.map((port) => port.die_temperature));
+  const hottest = maxTemperature(metrics.ports.map((port) => port.die_temperature));
   const productTitle = profile.family === "CP02"
     ? t("cp02Title")
     : t("mirrorTitle");
@@ -154,7 +157,7 @@ function Header({
           </div>
           <div className={`metric-pill temp-${temperatureLevel(hottest)}`}>
             <Gauge size={17} />
-            <span>{hottest}C</span>
+            <span>{formatTemperature(hottest)}</span>
           </div>
           <div className="metric-pill">
             <Radio size={17} />
@@ -532,7 +535,7 @@ function PortCard({ port }: { port: PortMetrics }) {
       <div className="port-grid">
         <span>{volts(port.voltage).toFixed(2)}V</span>
         <span>{amps(port.current).toFixed(2)}A</span>
-        <span>{port.die_temperature}C</span>
+        <span>{formatTemperature(port.die_temperature)}</span>
         <span>{protocolName(port.fc_protocol)}</span>
       </div>
       <div className="budget-row">
@@ -555,11 +558,12 @@ function SummaryStrip({
   const { t } = useI18n();
   const totalPower = metrics.ports.reduce((sum, port) => sum + watts(port), 0);
   const heapUsed = heap.total_allocated / (heap.total_allocated + heap.total_free);
+  const hottest = maxTemperature(metrics.ports.map((port) => port.die_temperature));
 
   return (
     <section className="summary-strip">
       <SummaryItem icon={<Zap size={18} />} label={t("totalPower")} value={`${totalPower.toFixed(1)}W`} detail={`${profile.totalPowerBudgetW}W ${t("modelMax")}`} />
-      <SummaryItem icon={<Gauge size={18} />} label={t("thermalPeak")} value={`${Math.max(...metrics.ports.map((p) => p.die_temperature))}C`} detail={t("thermalDetail")} />
+      <SummaryItem icon={<Gauge size={18} />} label={t("thermalPeak")} value={formatTemperature(hottest)} detail={t("thermalDetail")} />
       <SummaryItem icon={<HardDrive size={18} />} label={t("heapUsed")} value={`${Math.round(heapUsed * 100)}%`} detail={`${Math.round(heap.total_free / 1024)}KB ${t("available")}`} />
       <SummaryItem icon={<Cpu size={18} />} label={t("runtime")} value={formatDuration(metrics.system.boot_time_seconds)} detail={metrics.system.app_version} />
     </section>
@@ -653,7 +657,7 @@ function TaskPanel({ tasks }: { tasks: TaskMetrics[] }) {
 }
 
 function SystemPanel({ metrics, heap }: { metrics: Metrics; heap: HeapMetrics }) {
-  const { t } = useI18n();
+  const { language, t } = useI18n();
   return (
     <section className="panel system-panel">
       <div className="panel-header">
@@ -671,6 +675,10 @@ function SystemPanel({ metrics, heap }: { metrics: Metrics; heap: HeapMetrics })
         <div>
           <dt>IDF</dt>
           <dd>{metrics.system.idf_version}</dd>
+        </div>
+        <div>
+          <dt>Reset</dt>
+          <dd>{formatResetReason(metrics.system.reset_reason, language)}</dd>
         </div>
         <div>
           <dt>Wi-Fi</dt>
@@ -919,7 +927,7 @@ function App() {
           ))}
         </section>
         <section className="dashboard-grid">
-          <PowerChart history={history} />
+          <PowerChart history={history} source={source} transportState={transportState} />
           <RuntimePanel metrics={metrics} heap={heap} />
         </section>
         <LongHistoryPanel

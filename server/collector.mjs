@@ -55,7 +55,7 @@ export function createCollector({ store, fetchMachineInfo, fetchJson, refreshCon
         port: port.id,
         voltage: port.voltage,
         current: port.current,
-        temperature_c: port.die_temperature,
+        temperature_c: validTemperature(port.die_temperature),
         power_w: (port.voltage * port.current) / 1_000_000,
         attached: port.attached ? 1 : 0,
         protocol: port.fc_protocol,
@@ -115,4 +115,8 @@ export function createCollector({ store, fetchMachineInfo, fetchJson, refreshCon
   }
 
   return { startCollectors, stopCollector, runCollector, targetStats };
+}
+
+function validTemperature(value) {
+  return Number.isFinite(value) && Number(value) > 0 ? Number(value) : null;
 }

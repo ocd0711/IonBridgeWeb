@@ -3,7 +3,7 @@ import { Filter } from "lucide-react";
 import { Area, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
 import { fetchServerHistory, type ServerHistoryRow } from "../api";
-import { amps, formatDuration, kilobytes, milliwattHours, portLabel, protocolName, temperatureLevel, volts, watts } from "../format";
+import { amps, formatDuration, formatTemperature, kilobytes, milliwattHours, portLabel, protocolName, temperatureLevel, volts, watts } from "../format";
 import { useI18n, type TranslationKey } from "../i18n";
 import type { HeapMetrics, MachineInfo, Metrics, PortHistory, PortMetrics } from "../types";
 
@@ -234,7 +234,11 @@ function PortHistoryExplorer({
     voltage: volts(row.voltage),
     current: amps(row.current),
   }));
-  const selectedSeries = serverSeries.length > 0 ? serverSeries : localSeries;
+  const isQueryingHistory = serverStatus === "loading";
+  const canShowQueriedSeries = serverSeries.length > 0 || !isQueryingHistory;
+  const selectedSeries = serverSeries.length > 0 ? serverSeries : isQueryingHistory ? [] : localSeries;
+  const visibleSeriesPoints = selectedSeries.filter((sample) => sample.power != null || sample.temperature != null).length;
+  const hasInsufficientServerSeries = serverStatus === "ready" && serverSeries.length > 0 && visibleSeriesPoints < 2;
   const powers = selectedSeries.map((sample) => sample.power);
   const min = powers.length > 0 ? Math.min(...powers) : 0;
   const max = powers.length > 0 ? Math.max(...powers) : 0;
@@ -328,70 +332,88 @@ function PortHistoryExplorer({
                     : t("local60m")}
           </span>
         </div>
-        <ResponsiveContainer width="100%" height={230}>
-          <ComposedChart data={selectedSeries} margin={{ top: 12, right: 18, left: -22, bottom: 0 }}>
-            <defs>
-              <linearGradient id="portDetailFill" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="#f47b20" stopOpacity={0.36} />
-                <stop offset="100%" stopColor="#f47b20" stopOpacity={0.04} />
-              </linearGradient>
-            </defs>
-            <CartesianGrid stroke="#ded6cb" vertical />
-            <XAxis dataKey="time" tickLine={false} axisLine={false} tick={{ fill: "#766b5f", fontSize: 12 }} />
-            <YAxis yAxisId="power" tickLine={false} axisLine={false} tick={{ fill: "#766b5f", fontSize: 12 }} />
-            <YAxis
-              yAxisId="temperature"
-              orientation="right"
-              tickLine={false}
-              axisLine={false}
-              tick={{ fill: "#9c4f22", fontSize: 12 }}
-            />
-            <Tooltip formatter={(value, name) => name === "temperature" ? formatTemperatureTooltip(value) : `${Number(value).toFixed(2)}W`} />
-            <Area
-              dataKey="power"
-              dot={false}
-              fill="url(#portDetailFill)"
-              isAnimationActive={false}
-              stroke="#f47b20"
-              strokeWidth={2.5}
-              type="monotone"
-              yAxisId="power"
-            />
-            <Line
-              connectNulls
-              dataKey="temperature"
-              dot={false}
-              isAnimationActive={false}
-              name="temperature"
-              stroke="#7f6d52"
-              strokeDasharray="4 4"
-              strokeWidth={2}
-              type="monotone"
-              yAxisId="temperature"
-            />
-          </ComposedChart>
-        </ResponsiveContainer>
-        <div className="trend-stats">
-          <span>{t("min")} {min.toFixed(2)}W</span>
-          <span>{t("avg")} {avg.toFixed(2)}W</span>
-          <span>{t("max")} {max.toFixed(2)}W</span>
-        </div>
-        <div className="port-va-charts">
-          <MetricTrendChart
-            color="#2f806c"
-            data={selectedSeries}
-            dataKey="voltage"
-            title={`${t("voltage")} (V)`}
-            unit="V"
-          />
-          <MetricTrendChart
-            color="#6f5aa8"
-            data={selectedSeries}
-            dataKey="current"
-            title={`${t("current")} (A)`}
-            unit="A"
-          />
-        </div>
+        {canShowQueriedSeries && !hasInsufficientServerSeries ? (
+          <div className="history-query-shell">
+            <div className="history-chart-shell">
+            <ResponsiveContainer width="100%" height={230}>
+              <ComposedChart data={selectedSeries} margin={{ top: 12, right: 18, left: -22, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="portDetailFill" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#f47b20" stopOpacity={0.36} />
+                    <stop offset="100%" stopColor="#f47b20" stopOpacity={0.04} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid stroke="#ded6cb" vertical />
+                <XAxis dataKey="time" tickLine={false} axisLine={false} tick={{ fill: "#766b5f", fontSize: 12 }} />
+                <YAxis yAxisId="power" tickLine={false} axisLine={false} tick={{ fill: "#766b5f", fontSize: 12 }} />
+                <YAxis
+                  yAxisId="temperature"
+                  orientation="right"
+                  tickLine={false}
+                  axisLine={false}
+                  tick={{ fill: "#9c4f22", fontSize: 12 }}
+                />
+                <Tooltip formatter={(value, name) => name === "temperature" ? formatTemperatureTooltip(value) : `${Number(value).toFixed(2)}W`} />
+                <Area
+                  dataKey="power"
+                  dot={false}
+                  fill="url(#portDetailFill)"
+                  isAnimationActive={false}
+                  stroke="#f47b20"
+                  strokeWidth={2.5}
+                  type="monotone"
+                  yAxisId="power"
+                />
+                <Line
+                  connectNulls
+                  dataKey="temperature"
+                  dot={false}
+                  isAnimationActive={false}
+                  name="temperature"
+                  stroke="#7f6d52"
+                  strokeDasharray="4 4"
+                  strokeWidth={2}
+                  type="monotone"
+                  yAxisId="temperature"
+                />
+              </ComposedChart>
+            </ResponsiveContainer>
+            </div>
+            <div className="trend-stats">
+              <span>{t("min")} {min.toFixed(2)}W</span>
+              <span>{t("avg")} {avg.toFixed(2)}W</span>
+              <span>{t("max")} {max.toFixed(2)}W</span>
+            </div>
+            <div className="port-va-charts">
+              <MetricTrendChart
+                color="#2f806c"
+                data={selectedSeries}
+                dataKey="voltage"
+                title={`${t("voltage")} (V)`}
+                unit="V"
+              />
+              <MetricTrendChart
+                color="#6f5aa8"
+                data={selectedSeries}
+                dataKey="current"
+                title={`${t("current")} (A)`}
+                unit="A"
+              />
+            </div>
+            {isQueryingHistory ? (
+                <div className="history-loading-overlay" role="status">
+                  <span />
+                  <strong>{t("readingHistory")}</strong>
+                </div>
+              ) : null}
+          </div>
+        ) : (
+          <div className={`history-empty ${isQueryingHistory ? "history-loading-skeleton" : ""}`}>
+            {isQueryingHistory ? <i aria-hidden="true" /> : null}
+            <strong>{isQueryingHistory ? t("readingHistory") : t("waitingSamples")}</strong>
+            <span>{t("sqliteHint")}</span>
+          </div>
+        )}
         <div className="port-detail-lists">
           <dl>
             <div>
@@ -430,7 +452,7 @@ function PortHistoryExplorer({
             </div>
             <div>
               <dt>{t("portTemp")}</dt>
-              <dd>{selectedPort.die_temperature}C</dd>
+              <dd>{formatTemperature(selectedPort.die_temperature)}</dd>
             </div>
             <div>
               <dt>VIN</dt>

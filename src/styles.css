@@ -1902,6 +1902,20 @@ h1 {
   padding-bottom: 22px;
 }
 
+.live-chart-shell {
+  position: relative;
+  min-height: 300px;
+}
+
+.live-refresh-overlay {
+  top: 10px;
+}
+
+.live-collecting-state {
+  min-height: 300px;
+  align-content: center;
+}
+
 .long-history-panel {
   display: grid;
   gap: 16px;
@@ -1977,6 +1991,12 @@ h1 {
 .history-chart-shell {
   position: relative;
   min-height: 280px;
+}
+
+.history-query-shell {
+  position: relative;
+  display: grid;
+  gap: 12px;
 }
 
 .history-loading-overlay {

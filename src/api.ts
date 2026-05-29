@@ -73,7 +73,7 @@ export type ServerHistoryRow = {
   port: number;
   voltage: number;
   current: number;
-  temperature_c: number;
+  temperature_c: number | null;
   power_w: number;
   attached: boolean;
   protocol: string;
@@ -268,7 +268,7 @@ async function getMachineInfoWithRetry(targetUrl: string, deviceKey?: string | n
       return await getMachineInfo(targetUrl, deviceKey);
     } catch (error) {
       lastError = error;
-      await new Promise((resolve) => window.setTimeout(resolve, 500 * (attempt + 1)));
+      await new Promise((resolve) => globalThis.setTimeout(resolve, 500 * (attempt + 1)));
     }
   }
   throw lastError;
@@ -281,7 +281,7 @@ async function getJsonWithRetry<T>(path: string, targetUrl: string, timeoutMs: n
       return await getJson<T>(path, targetUrl, timeoutMs, deviceKey);
     } catch (error) {
       lastError = error;
-      await new Promise((resolve) => window.setTimeout(resolve, 350 * (attempt + 1)));
+      await new Promise((resolve) => globalThis.setTimeout(resolve, 350 * (attempt + 1)));
     }
   }
   throw lastError;
@@ -289,11 +289,11 @@ async function getJsonWithRetry<T>(path: string, targetUrl: string, timeoutMs: n
 
 async function fetchWithTimeout(url: string, timeoutMs: number): Promise<Response> {
   const controller = new AbortController();
-  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+  const timer = globalThis.setTimeout(() => controller.abort(), timeoutMs);
   try {
     return await fetch(url, { cache: "no-store", signal: controller.signal });
   } finally {
-    window.clearTimeout(timer);
+    globalThis.clearTimeout(timer);
   }
 }
 
@@ -397,7 +397,7 @@ function offlineMetricsFromHistory(rows: ServerHistoryRow[]): Metrics {
     fc_protocol: Number.parseFloat(row.protocol) || 0,
     current: row.current,
     voltage: row.voltage,
-    die_temperature: row.temperature_c,
+    die_temperature: validTemperature(row.temperature_c) ?? undefined,
     vin_value: 0,
     session_id: 0,
     session_charge: 0,
@@ -415,10 +415,16 @@ function offlineMetricsFromHistory(rows: ServerHistoryRow[]): Metrics {
 }
 
 function historyFromServerRows(rows: ServerHistoryRow[]): PortHistory {
-  const byPort = new Map<number, Array<{ voltage: number; current: number; temperature_c: number; ts: number }>>();
+  const byPort = new Map<number, Array<{ voltage: number; current: number; temperature_c?: number; ts: number }>>();
   for (const row of rows) {
     const samples = byPort.get(row.port) ?? [];
-    samples.push({ voltage: row.voltage, current: row.current, temperature_c: row.temperature_c, ts: row.ts });
+    const temperature = validTemperature(row.temperature_c);
+    samples.push({
+      voltage: row.voltage,
+      current: row.current,
+      ...(temperature == null ? {} : { temperature_c: temperature }),
+      ts: row.ts,
+    });
     byPort.set(row.port, samples);
   }
   return {
@@ -435,7 +441,12 @@ function liveOnlyHistory(metrics: Metrics, ts = Date.now()): PortHistory {
     sample_period_ms: 10000,
     ports: metrics.ports.map((port) => ({
       port: port.id,
-      samples: [{ voltage: port.voltage, current: port.current, temperature_c: port.die_temperature, ts }],
+      samples: [{
+        voltage: port.voltage,
+        current: port.current,
+        ...(validTemperature(port.die_temperature) == null ? {} : { temperature_c: validTemperature(port.die_temperature) as number }),
+        ts,
+      }],
     })),
   };
 }
@@ -505,7 +516,7 @@ function mergeHistory(seed: PortHistory, metrics: Metrics, targetUrl: string, no
     const current = {
       voltage: port.voltage,
       current: port.current,
-      temperature_c: port.die_temperature,
+      temperature_c: validTemperature(port.die_temperature) ?? undefined,
       ts: now,
     };
     byPort.set(port.id, mergeSamples(byPort.get(port.id) ?? [], [current], now));
@@ -550,6 +561,10 @@ function hasTs(
   sample: { voltage: number; current: number; temperature_c?: number; ts?: number },
 ): sample is { voltage: number; current: number; temperature_c?: number; ts: number } {
   return Number.isFinite(sample.ts);
+}
+
+function validTemperature(value: number | null | undefined) {
+  return Number.isFinite(value) && Number(value) > 0 ? Number(value) : null;
 }
 
 function historyStorageKey(targetUrl: string) {

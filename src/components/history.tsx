@@ -5,6 +5,7 @@ import { Area, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip,
 import { fetchServerHistory, type ServerHistoryRow } from "../api";
 import { MultiMetricTrendChart } from "./diagnostics";
 import { amps, portLabel, volts, watts } from "../format";
+import type { DashboardData, LiveTransportState } from "../hooks/useDashboardData";
 import { useI18n, type TranslationKey } from "../i18n";
 import type { Metrics, PortHistory, PortMetrics } from "../types";
 function samplePower(sample: { voltage: number; current: number }) {
@@ -76,6 +77,9 @@ export function LongHistoryPanel({
   const [customEnd, setCustomEnd] = React.useState(formatDateTimeLocal(now));
   const [portFilter, setPortFilter] = React.useState<number | null>(null);
   const [rows, setRows] = React.useState<ServerHistoryRow[]>([]);
+  const pendingLiveRowsRef = React.useRef<ServerHistoryRow[]>([]);
+  const statusRef = React.useRef<"loading" | "ready" | "empty" | "unavailable">("loading");
+  const loadedAtRef = React.useRef<Date | null>(null);
   const [status, setStatus] = React.useState<"loading" | "ready" | "empty" | "unavailable">("loading");
   const [loadedAt, setLoadedAt] = React.useState<Date | null>(null);
   const start = rangeMode === "custom" ? parseDateTimeLocal(customStart) : undefined;
@@ -83,15 +87,26 @@ export function LongHistoryPanel({
   const canQuery = rangeMode === "preset" || (start != null && end != null && start <= end);
 
   React.useEffect(() => {
+    statusRef.current = status;
+  }, [status]);
+
+  React.useEffect(() => {
+    loadedAtRef.current = loadedAt;
+  }, [loadedAt]);
+
+  React.useEffect(() => {
     let alive = true;
     if (!canQuery) {
       setRows([]);
+      pendingLiveRowsRef.current = [];
       setLoadedAt(null);
       setStatus("empty");
       return () => {
         alive = false;
       };
     }
+    pendingLiveRowsRef.current = [];
+    if (!loadedAtRef.current) setRows([]);
     setStatus("loading");
     fetchServerHistory({
       targetUrl,
@@ -103,12 +118,15 @@ export function LongHistoryPanel({
     })
       .then((nextRows) => {
         if (!alive) return;
-        setRows(nextRows);
+        const mergedRows = mergeServerHistoryRows([...nextRows, ...pendingLiveRowsRef.current]);
+        pendingLiveRowsRef.current = [];
+        setRows(mergedRows);
         setLoadedAt(new Date());
-        setStatus(nextRows.length > 0 ? "ready" : "empty");
+        setStatus(mergedRows.length > 0 ? "ready" : "empty");
       })
       .catch(() => {
         if (!alive) return;
+        pendingLiveRowsRef.current = [];
         setRows([]);
         setLoadedAt(null);
         setStatus("unavailable");
@@ -132,19 +150,24 @@ export function LongHistoryPanel({
         port: port.id,
         voltage: port.voltage,
         current: port.current,
-        temperature_c: port.die_temperature,
+        temperature_c: validTemperature(port.die_temperature),
         power_w: watts(port),
         attached: port.attached,
         protocol: String(port.fc_protocol),
       }));
+    if (statusRef.current === "loading") {
+      pendingLiveRowsRef.current = mergeServerHistoryRows([...pendingLiveRowsRef.current, ...nextLiveRows]);
+      if (!loadedAtRef.current) return;
+    }
     setRows((currentRows) => {
       const merged = [...currentRows.filter((row) => row.ts >= rangeStart && row.ts <= rangeEnd), ...nextLiveRows];
-      const bySample = new Map<string, ServerHistoryRow>();
-      for (const row of merged) bySample.set(`${row.ts}:${row.port}`, row);
-      return Array.from(bySample.values()).sort((a, b) => a.ts - b.ts || a.port - b.port);
+      return mergeServerHistoryRows(merged);
     });
     setLoadedAt(new Date());
-    setStatus((currentStatus) => currentStatus === "unavailable" ? currentStatus : "ready");
+    setStatus((currentStatus) => {
+      if (currentStatus === "loading" || currentStatus === "unavailable") return currentStatus;
+      return "ready";
+    });
   }, [targetUrl, isLive, metrics, hours, rangeMode, portFilter, updatedAt, canQuery, start, end]);
 
   const chartRows = React.useMemo(() => buildServerHistoryChartRows(rows), [rows]);
@@ -152,7 +175,9 @@ export function LongHistoryPanel({
   const avgPower = powerValues.reduce((sum, value) => sum + value, 0) / Math.max(powerValues.length, 1);
   const maxPower = powerValues.length > 0 ? Math.max(...powerValues) : 0;
   const maxTemp = maxValidTemperature(chartRows.map((row) => row.temperature));
-  const canShowChart = status === "ready" || (status === "loading" && rows.length > 0);
+  const visibleChartPoints = chartRows.filter((row) => row.power != null || row.temperature != null).length;
+  const canShowChart = status === "ready" || (status === "loading" && loadedAt != null && rows.length > 0);
+  const showInsufficientState = status === "ready" && visibleChartPoints < 2;
 
   return (
     <section className="panel long-history-panel" id="history" aria-busy={status === "loading"}>
@@ -207,7 +232,7 @@ export function LongHistoryPanel({
         </div>
       </div>
 
-      {canShowChart ? (
+      {canShowChart && !showInsufficientState ? (
         <>
           <div className="history-chart-shell">
             <ResponsiveContainer width="100%" height={280}>
@@ -282,6 +307,8 @@ export function LongHistoryPanel({
               ? t("readingHistory")
               : !canQuery
                 ? t("invalidRange")
+              : showInsufficientState
+                ? t("waitingSamples")
               : status === "empty"
                 ? t("emptyHistory")
                 : t("unavailableHistory")}
@@ -301,6 +328,12 @@ function formatDateTimeLocal(date: Date) {
 function parseDateTimeLocal(value: string) {
   const time = new Date(value).getTime();
   return Number.isFinite(time) ? time : undefined;
+}
+
+function mergeServerHistoryRows(rows: ServerHistoryRow[]) {
+  const bySample = new Map<string, ServerHistoryRow>();
+  for (const row of rows) bySample.set(`${row.ts}:${row.port}`, row);
+  return Array.from(bySample.values()).sort((a, b) => a.ts - b.ts || a.port - b.port);
 }
 
 export function buildServerHistoryChartRows(rows: ServerHistoryRow[]) {
@@ -363,7 +396,15 @@ function chooseHistoryBucketMs(rows: ServerHistoryRow[]) {
   return 60 * 1000;
 }
 
-export function PowerChart({ history }: { history: PortHistory }) {
+export function PowerChart({
+  history,
+  source,
+  transportState,
+}: {
+  history: PortHistory;
+  source: DashboardData["source"];
+  transportState: LiveTransportState;
+}) {
   const { t } = useI18n();
   const portKeys = ["A", "C1", "C2", "C3", "C4"];
   const portColors = ["#2b2926", "#f47b20", "#d9571c", "#917a54", "#6d9483"];
@@ -392,6 +433,11 @@ export function PowerChart({ history }: { history: PortHistory }) {
 
     return row;
   }) ?? [];
+  const visibleTrendPoints = rows.filter((row) => (
+    row.temperature != null || portKeys.some((key) => typeof row[key] === "number")
+  )).length;
+  const canShowTrend = visibleTrendPoints >= 2;
+  const showRefreshState = canShowTrend && source === "device" && transportState !== "sse";
 
   return (
     <section className="panel chart-panel">
@@ -403,78 +449,95 @@ export function PowerChart({ history }: { history: PortHistory }) {
         </div>
         <Activity size={20} />
       </div>
-      <ResponsiveContainer width="100%" height={300}>
-        <ComposedChart data={rows} margin={{ top: 12, right: 12, left: -18, bottom: 0 }}>
-          <defs>
-            <linearGradient id="amberFill" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#f47b20" stopOpacity={0.45} />
-              <stop offset="100%" stopColor="#f47b20" stopOpacity={0.02} />
-            </linearGradient>
-          </defs>
-          <CartesianGrid stroke="var(--chart-grid)" vertical={false} />
-          <XAxis dataKey="time" tickLine={false} axisLine={false} tick={{ fill: "var(--chart-axis)", fontSize: 12 }} />
-          <YAxis yAxisId="power" tickLine={false} axisLine={false} tick={{ fill: "var(--chart-axis)", fontSize: 12 }} />
-          <YAxis
-            yAxisId="temperature"
-            orientation="right"
-            tickLine={false}
-            axisLine={false}
-            tick={{ fill: "var(--amber-deep)", fontSize: 12 }}
-          />
-          <Tooltip
-            contentStyle={{
-              background: "var(--chart-tooltip-bg)",
-              border: "1px solid var(--chart-tooltip-border)",
-              borderRadius: 8,
-              color: "var(--chart-tooltip-ink)",
-            }}
-            formatter={(value, name) => name === "temperature" ? formatTemperatureTooltip(value) : `${Number(value).toFixed(1)}W`}
-          />
-          {portKeys.map((key, index) => (
-            <Area
-              key={key}
-              type="monotone"
-              dataKey={key}
-              stroke={portColors[index]}
-              fill={index === 1 ? "url(#amberFill)" : "transparent"}
-              strokeWidth={2}
-              dot={false}
-              isAnimationActive={false}
-              yAxisId="power"
+      {canShowTrend ? (
+        <>
+          <div className="live-chart-shell">
+            <ResponsiveContainer width="100%" height={300}>
+              <ComposedChart data={rows} margin={{ top: 12, right: 12, left: -18, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="amberFill" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#f47b20" stopOpacity={0.45} />
+                    <stop offset="100%" stopColor="#f47b20" stopOpacity={0.02} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid stroke="var(--chart-grid)" vertical={false} />
+                <XAxis dataKey="time" tickLine={false} axisLine={false} tick={{ fill: "var(--chart-axis)", fontSize: 12 }} />
+                <YAxis yAxisId="power" tickLine={false} axisLine={false} tick={{ fill: "var(--chart-axis)", fontSize: 12 }} />
+                <YAxis
+                  yAxisId="temperature"
+                  orientation="right"
+                  tickLine={false}
+                  axisLine={false}
+                  tick={{ fill: "var(--amber-deep)", fontSize: 12 }}
+                />
+                <Tooltip
+                  contentStyle={{
+                    background: "var(--chart-tooltip-bg)",
+                    border: "1px solid var(--chart-tooltip-border)",
+                    borderRadius: 8,
+                    color: "var(--chart-tooltip-ink)",
+                  }}
+                  formatter={(value, name) => name === "temperature" ? formatTemperatureTooltip(value) : `${Number(value).toFixed(1)}W`}
+                />
+                {portKeys.map((key, index) => (
+                  <Area
+                    key={key}
+                    type="monotone"
+                    dataKey={key}
+                    stroke={portColors[index]}
+                    fill={index === 1 ? "url(#amberFill)" : "transparent"}
+                    strokeWidth={2}
+                    dot={false}
+                    isAnimationActive={false}
+                    yAxisId="power"
+                  />
+                ))}
+                <Line
+                  connectNulls
+                  dataKey="temperature"
+                  dot={false}
+                  isAnimationActive={false}
+                  name="temperature"
+                  stroke="#7f6d52"
+                  strokeDasharray="5 5"
+                  strokeWidth={2}
+                  type="monotone"
+                  yAxisId="temperature"
+                />
+              </ComposedChart>
+            </ResponsiveContainer>
+            {showRefreshState ? (
+              <div className="history-loading-overlay live-refresh-overlay" role="status">
+                <span aria-hidden="true" />
+                <strong>{t("refreshingLive")}</strong>
+              </div>
+            ) : null}
+          </div>
+          <div className="port-va-charts live-va-charts">
+            <MultiMetricTrendChart
+              colors={portColors}
+              data={rows}
+              keys={portKeys.map((key) => `${key}V`)}
+              labels={portKeys}
+              title={`${t("voltage")} (V)`}
+              unit="V"
             />
-          ))}
-          <Line
-            connectNulls
-            dataKey="temperature"
-            dot={false}
-            isAnimationActive={false}
-            name="temperature"
-            stroke="#7f6d52"
-            strokeDasharray="5 5"
-            strokeWidth={2}
-            type="monotone"
-            yAxisId="temperature"
-          />
-        </ComposedChart>
-      </ResponsiveContainer>
-      <div className="port-va-charts live-va-charts">
-        <MultiMetricTrendChart
-          colors={portColors}
-          data={rows}
-          keys={portKeys.map((key) => `${key}V`)}
-          labels={portKeys}
-          title={`${t("voltage")} (V)`}
-          unit="V"
-        />
-        <MultiMetricTrendChart
-          colors={portColors}
-          data={rows}
-          keys={portKeys.map((key) => `${key}A`)}
-          labels={portKeys}
-          title={`${t("current")} (A)`}
-          unit="A"
-        />
-      </div>
+            <MultiMetricTrendChart
+              colors={portColors}
+              data={rows}
+              keys={portKeys.map((key) => `${key}A`)}
+              labels={portKeys}
+              title={`${t("current")} (A)`}
+              unit="A"
+            />
+          </div>
+        </>
+      ) : (
+        <div className="history-empty live-collecting-state">
+          <strong>{t("collectingLiveSamples")}</strong>
+          <span>{t("collectingLiveSamplesHelp")}</span>
+        </div>
+      )}
     </section>
   );
 }
