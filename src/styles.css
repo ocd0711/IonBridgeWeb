@@ -1946,6 +1946,7 @@ h1 {
 }
 
 .history-filters select {
+  color-scheme: light;
   border: 0;
   background: transparent;
   color: var(--ink);
@@ -1953,6 +1954,11 @@ h1 {
   font-size: 13px;
   font-weight: 900;
   outline: none;
+}
+
+.history-filters select option {
+  background: #fffdfa;
+  color: #28231f;
 }
 
 .history-filters input {
@@ -2424,7 +2430,6 @@ h1 {
   .login-card input,
   .target-control,
   .target-control input,
-  .history-filters select,
   .history-filters input {
     color: var(--ink);
   }
