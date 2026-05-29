@@ -71,11 +71,13 @@ export type ServerHistoryRow = {
   ts: number;
   target: string;
   port: number;
+  active?: boolean;
+  attached: boolean;
   voltage: number;
   current: number;
+  state?: string;
   temperature_c: number | null;
   power_w: number;
-  attached: boolean;
   protocol: string;
 };
 
@@ -389,8 +391,8 @@ function offlineMetricsFromHistory(rows: ServerHistoryRow[]): Metrics {
   const latestRows = rows.filter((row) => row.ts === latestTs);
   const ports: PortMetrics[] = latestRows.map((row) => ({
     id: row.port,
-    active: false,
-    state: row.attached ? "LAST_ATTACHED" : "LAST_IDLE",
+    active: row.active ?? row.attached,
+    state: row.state || (row.attached ? "ATTACHED" : "ACTIVE"),
     port_type: row.port === 0 ? "A" as const : "C" as const,
     attached: row.attached,
     charging_duration_seconds: 0,
@@ -415,13 +417,16 @@ function offlineMetricsFromHistory(rows: ServerHistoryRow[]): Metrics {
 }
 
 function historyFromServerRows(rows: ServerHistoryRow[]): PortHistory {
-  const byPort = new Map<number, Array<{ voltage: number; current: number; temperature_c?: number; ts: number }>>();
+  const byPort = new Map<number, Array<{ active?: boolean; attached?: boolean; voltage: number; current: number; state?: string; temperature_c?: number; ts: number }>>();
   for (const row of rows) {
     const samples = byPort.get(row.port) ?? [];
     const temperature = validTemperature(row.temperature_c);
     samples.push({
+      active: row.active,
+      attached: row.attached,
       voltage: row.voltage,
       current: row.current,
+      state: row.state,
       ...(temperature == null ? {} : { temperature_c: temperature }),
       ts: row.ts,
     });
@@ -444,6 +449,9 @@ function liveOnlyHistory(metrics: Metrics, ts = Date.now()): PortHistory {
       samples: [{
         voltage: port.voltage,
         current: port.current,
+        active: port.active,
+        attached: port.attached,
+        state: port.state,
         ...(validTemperature(port.die_temperature) == null ? {} : { temperature_c: validTemperature(port.die_temperature) as number }),
         ts,
       }],
@@ -495,7 +503,7 @@ function writeCachedMachineInfo(targetUrl: string, machineInfo: MachineInfo) {
 function mergeHistory(seed: PortHistory, metrics: Metrics, targetUrl: string, now = Date.now()): PortHistory {
   const period = seed.sample_period_ms > 0 ? seed.sample_period_ms : 10000;
   const stored = readStoredHistory(targetUrl);
-  const byPort = new Map<number, Array<{ voltage: number; current: number; temperature_c?: number; ts: number }>>();
+  const byPort = new Map<number, Array<{ active?: boolean; attached?: boolean; voltage: number; current: number; state?: string; temperature_c?: number; ts: number }>>();
 
   for (const port of stored.ports) {
     byPort.set(port.port, port.samples.filter(hasTs));
@@ -506,6 +514,9 @@ function mergeHistory(seed: PortHistory, metrics: Metrics, targetUrl: string, no
     const timeline = port.samples.map((sample, index) => ({
       voltage: sample.voltage,
       current: sample.current,
+      active: sample.active,
+      attached: sample.attached,
+      state: sample.state,
       temperature_c: sample.temperature_c,
       ts: sample.ts ?? start + index * period,
     }));
@@ -516,6 +527,9 @@ function mergeHistory(seed: PortHistory, metrics: Metrics, targetUrl: string, no
     const current = {
       voltage: port.voltage,
       current: port.current,
+      active: port.active,
+      attached: port.attached,
+      state: port.state,
       temperature_c: validTemperature(port.die_temperature) ?? undefined,
       ts: now,
     };
@@ -533,21 +547,24 @@ function mergeHistory(seed: PortHistory, metrics: Metrics, targetUrl: string, no
 }
 
 function mergeSamples(
-  existing: Array<{ voltage: number; current: number; temperature_c?: number; ts: number }>,
-  incoming: Array<{ voltage: number; current: number; temperature_c?: number; ts: number }>,
+  existing: Array<{ active?: boolean; attached?: boolean; voltage: number; current: number; state?: string; temperature_c?: number; ts: number }>,
+  incoming: Array<{ active?: boolean; attached?: boolean; voltage: number; current: number; state?: string; temperature_c?: number; ts: number }>,
   now: number,
 ) {
   const cutoff = now - HISTORY_WINDOW_MS;
   const merged = [...existing, ...incoming]
     .filter((sample) => sample.ts >= cutoff && sample.ts <= now + 1000)
     .sort((a, b) => a.ts - b.ts);
-  const deduped: Array<{ voltage: number; current: number; temperature_c?: number; ts: number }> = [];
+  const deduped: Array<{ active?: boolean; attached?: boolean; voltage: number; current: number; state?: string; temperature_c?: number; ts: number }> = [];
   for (const sample of merged) {
     const last = deduped[deduped.length - 1];
     if (last && Math.abs(last.ts - sample.ts) < 1000) {
       deduped[deduped.length - 1] = {
         ...last,
         ...sample,
+        active: sample.active ?? last.active,
+        attached: sample.attached ?? last.attached,
+        state: sample.state ?? last.state,
         temperature_c: sample.temperature_c ?? last.temperature_c,
       };
     } else {
@@ -558,8 +575,8 @@ function mergeSamples(
 }
 
 function hasTs(
-  sample: { voltage: number; current: number; temperature_c?: number; ts?: number },
-): sample is { voltage: number; current: number; temperature_c?: number; ts: number } {
+  sample: { active?: boolean; attached?: boolean; voltage: number; current: number; state?: string; temperature_c?: number; ts?: number },
+): sample is { active?: boolean; attached?: boolean; voltage: number; current: number; state?: string; temperature_c?: number; ts: number } {
   return Number.isFinite(sample.ts);
 }
 

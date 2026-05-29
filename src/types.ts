@@ -52,8 +52,11 @@ export type PortHistory = {
   ports: Array<{
     port: number;
     samples: Array<{
+      active?: boolean;
+      attached?: boolean;
       voltage: number;
       current: number;
+      state?: string;
       temperature_c?: number;
       ts?: number;
     }>;

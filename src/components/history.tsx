@@ -4,7 +4,7 @@ import { Area, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip,
 
 import { fetchServerHistory, type ServerHistoryRow } from "../api";
 import { MultiMetricTrendChart } from "./diagnostics";
-import { amps, portLabel, volts, watts } from "../format";
+import { amps, portLabel, sampleRuntimeState, volts, watts, type PortRuntimeState } from "../format";
 import type { DashboardData, LiveTransportState } from "../hooks/useDashboardData";
 import { useI18n, type TranslationKey } from "../i18n";
 import type { Metrics, PortHistory, PortMetrics } from "../types";
@@ -28,6 +28,28 @@ function formatTemperatureTooltip(value: unknown) {
 function formatPowerTooltip(value: unknown) {
   return typeof value === "number" ? `${value.toFixed(2)}W` : "N/A";
 }
+
+function portRuntimeStateLabelKey(state: PortRuntimeState): TranslationKey {
+  return {
+    attached: "attached",
+    fault: "portFault",
+    "no-power": "noPower",
+    off: "portOff",
+    protecting: "portProtecting",
+    ready: "ready",
+    recovering: "portRecovering",
+    switching: "portSwitching",
+  }[state] as TranslationKey;
+}
+
+type HistoryStateCount = { count: number; state: PortRuntimeState };
+type ServerHistoryChartRow = {
+  power: number | null;
+  states?: HistoryStateCount[];
+  temperature: number | null;
+  time: string;
+  ts: number;
+};
 
 function getHistoryCoverageLabel(history: PortHistory, t: (key: TranslationKey) => string) {
   const samples = Math.max(...history.ports.map((port) => port.samples.length), 0);
@@ -253,15 +275,7 @@ export function LongHistoryPanel({
                   axisLine={false}
                   tick={{ fill: "var(--amber-deep)", fontSize: 12 }}
                 />
-                <Tooltip
-                  contentStyle={{
-                    background: "var(--chart-tooltip-bg)",
-                    border: "1px solid var(--chart-tooltip-border)",
-                    borderRadius: 8,
-                    color: "var(--chart-tooltip-ink)",
-                  }}
-                  formatter={(value, name) => name === "temperature" ? formatTemperatureTooltip(value) : formatPowerTooltip(value)}
-                />
+                <Tooltip content={<ServerHistoryTooltip />} />
                 <Area
                   dataKey="power"
                   dot={false}
@@ -320,6 +334,33 @@ export function LongHistoryPanel({
   );
 }
 
+function ServerHistoryTooltip({
+  active,
+  payload,
+}: {
+  active?: boolean;
+  payload?: Array<{ payload?: ServerHistoryChartRow }>;
+}) {
+  const { t } = useI18n();
+  if (!active) return null;
+  const row = payload?.[0]?.payload;
+  if (!row || row.power == null) return null;
+  return (
+    <div className="history-tooltip">
+      <strong>{row.time}</strong>
+      <span>{t("power")} · {formatPowerTooltip(row.power)}</span>
+      <span>{t("thermalPeak")} · {formatTemperatureTooltip(row.temperature)}</span>
+      {row.states && row.states.length > 0 ? (
+        <div className="history-tooltip-states">
+          {row.states.map((item) => (
+            <i key={item.state} className={`state-dot port-${item.state}`}>{t(portRuntimeStateLabelKey(item.state))} {item.count}</i>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function formatDateTimeLocal(date: Date) {
   const pad = (value: number) => String(value).padStart(2, "0");
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
@@ -338,24 +379,32 @@ function mergeServerHistoryRows(rows: ServerHistoryRow[]) {
 
 export function buildServerHistoryChartRows(rows: ServerHistoryRow[]) {
   const bucketMs = chooseHistoryBucketMs(rows);
-  const buckets = new Map<number, Map<number, { power: number; temperature: number | null }>>();
+  const buckets = new Map<number, {
+    states: Map<PortRuntimeState, number>;
+    timeline: Map<number, { power: number; temperature: number | null }>;
+  }>();
   for (const row of rows) {
     const bucket = Math.floor(row.ts / bucketMs) * bucketMs;
-    const timeline = buckets.get(bucket) ?? new Map<number, { power: number; temperature: number | null }>();
-    const existing = timeline.get(row.ts) ?? { power: 0, temperature: null };
+    const bucketRows = buckets.get(bucket) ?? {
+      states: new Map<PortRuntimeState, number>(),
+      timeline: new Map<number, { power: number; temperature: number | null }>(),
+    };
+    const existing = bucketRows.timeline.get(row.ts) ?? { power: 0, temperature: null };
     const temperature = validTemperature(row.temperature_c);
     existing.power += row.power_w;
     existing.temperature = temperature == null
       ? existing.temperature
       : Math.max(existing.temperature ?? temperature, temperature);
-    timeline.set(row.ts, existing);
-    buckets.set(bucket, timeline);
+    const state = sampleRuntimeState(row);
+    bucketRows.states.set(state, (bucketRows.states.get(state) ?? 0) + 1);
+    bucketRows.timeline.set(row.ts, existing);
+    buckets.set(bucket, bucketRows);
   }
 
   const chartRows = Array.from(buckets.entries())
     .sort(([a], [b]) => a - b)
-    .map(([ts, timeline]) => {
-      const values = Array.from(timeline.values());
+    .map(([ts, bucket]) => {
+      const values = Array.from(bucket.timeline.values());
       return {
         ts,
         time: new Date(ts).toLocaleString("zh-CN", {
@@ -367,20 +416,23 @@ export function buildServerHistoryChartRows(rows: ServerHistoryRow[]) {
           hour12: false,
         }),
         power: values.reduce((sum, value) => sum + value.power, 0) / Math.max(values.length, 1),
+        states: Array.from(bucket.states.entries())
+          .map(([state, count]) => ({ count, state }))
+          .sort((a, b) => b.count - a.count),
         temperature: maxValidTemperature(values.map((value) => value.temperature)),
       };
     });
   return insertHistoryGaps(chartRows, bucketMs);
 }
 
-function insertHistoryGaps<T extends { ts: number; power: number | null; temperature: number | null }>(rows: T[], bucketMs: number) {
+function insertHistoryGaps(rows: ServerHistoryChartRow[], bucketMs: number) {
   if (rows.length < 2) return rows;
-  const result: T[] = [];
+  const result: ServerHistoryChartRow[] = [];
   for (const row of rows) {
     const previous = result[result.length - 1];
     if (previous && row.ts - previous.ts > bucketMs * 2.5) {
-      result.push({ ...previous, power: null, temperature: null });
-      result.push({ ...row, power: null, temperature: null });
+      result.push({ ...previous, power: null, states: [], temperature: null });
+      result.push({ ...row, power: null, states: [], temperature: null });
     }
     result.push(row);
   }

@@ -53,11 +53,13 @@ export function createCollector({ store, fetchMachineInfo, fetchJson, refreshCon
         ts,
         target: normalizedTarget,
         port: port.id,
+        active: port.active ? 1 : 0,
+        attached: port.attached ? 1 : 0,
         voltage: port.voltage,
         current: port.current,
+        state: port.state ?? "",
         temperature_c: validTemperature(port.die_temperature),
         power_w: (port.voltage * port.current) / 1_000_000,
-        attached: port.attached ? 1 : 0,
         protocol: port.fc_protocol,
       })));
       store.pruneHistory(ts);

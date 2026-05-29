@@ -3,7 +3,20 @@ import { Filter } from "lucide-react";
 import { Area, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
 import { fetchServerHistory, type ServerHistoryRow } from "../api";
-import { amps, formatDuration, formatTemperature, kilobytes, milliwattHours, portLabel, protocolName, temperatureLevel, volts, watts } from "../format";
+import {
+  amps,
+  formatDuration,
+  formatTemperature,
+  kilobytes,
+  milliwattHours,
+  portLabel,
+  protocolName,
+  sampleRuntimeState,
+  temperatureLevel,
+  volts,
+  watts,
+  type PortRuntimeState,
+} from "../format";
 import { useI18n, type TranslationKey } from "../i18n";
 import type { HeapMetrics, MachineInfo, Metrics, PortHistory, PortMetrics } from "../types";
 
@@ -15,6 +28,19 @@ function formatDateTimeLocal(date: Date) {
 function parseDateTimeLocal(value: string) {
   const time = new Date(value).getTime();
   return Number.isFinite(time) ? time : undefined;
+}
+
+function portRuntimeStateLabelKey(state: PortRuntimeState): TranslationKey {
+  return {
+    attached: "attached",
+    fault: "portFault",
+    "no-power": "noPower",
+    off: "portOff",
+    protecting: "portProtecting",
+    ready: "ready",
+    recovering: "portRecovering",
+    switching: "portSwitching",
+  }[state] as TranslationKey;
 }
 
 export function DiagnosticsDeck({
@@ -223,6 +249,7 @@ function PortHistoryExplorer({
   const localSeries = selectedSamples.map((sample, index) => ({
     time: formatSampleTime(sample.ts, selectedSamples.length, index, history.sample_period_ms),
     power: samplePower(sample),
+    state: sampleRuntimeState(sample),
     temperature: validTemperature(sample.temperature_c) ?? validTemperature(selectedPort?.die_temperature),
     voltage: volts(sample.voltage),
     current: amps(sample.current),
@@ -230,6 +257,7 @@ function PortHistoryExplorer({
   const serverSeries = serverRows.map((row) => ({
     time: new Date(row.ts).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }),
     power: row.power_w,
+    state: sampleRuntimeState(row),
     temperature: validTemperature(row.temperature_c) ?? validTemperature(selectedPort?.die_temperature),
     voltage: volts(row.voltage),
     current: amps(row.current),
@@ -353,7 +381,7 @@ function PortHistoryExplorer({
                   axisLine={false}
                   tick={{ fill: "#9c4f22", fontSize: 12 }}
                 />
-                <Tooltip formatter={(value, name) => name === "temperature" ? formatTemperatureTooltip(value) : `${Number(value).toFixed(2)}W`} />
+                <Tooltip content={<PortDetailTooltip />} />
                 <Area
                   dataKey="power"
                   dot={false}
@@ -486,7 +514,7 @@ function MetricTrendChart({
   unit,
 }: {
   color: string;
-  data: Array<{ time: string; voltage?: number | string | null; current?: number | string | null }>;
+  data: Array<{ current?: number | string | null; state?: PortRuntimeState; time: string; voltage?: number | string | null }>;
   dataKey: "voltage" | "current";
   title: string;
   unit: string;
@@ -499,7 +527,7 @@ function MetricTrendChart({
           <CartesianGrid stroke="#e6dfd4" vertical={false} />
           <XAxis dataKey="time" tickLine={false} axisLine={false} tick={{ fill: "#766b5f", fontSize: 11 }} />
           <YAxis domain={["auto", "auto"]} tickLine={false} axisLine={false} tick={{ fill: "#766b5f", fontSize: 11 }} />
-          <Tooltip formatter={(value) => `${Number(value).toFixed(3)}${unit}`} />
+          <Tooltip content={<PortMetricTooltip dataKey={dataKey} unit={unit} />} />
           <Line
             connectNulls
             dataKey={dataKey}
@@ -511,6 +539,52 @@ function MetricTrendChart({
           />
         </ComposedChart>
       </ResponsiveContainer>
+    </div>
+  );
+}
+
+function PortDetailTooltip({
+  active,
+  payload,
+}: {
+  active?: boolean;
+  payload?: Array<{ dataKey?: string; payload?: { power?: number | null; state?: PortRuntimeState; temperature?: number | null; time: string }; value?: unknown }>;
+}) {
+  const { t } = useI18n();
+  if (!active) return null;
+  const row = payload?.[0]?.payload;
+  if (!row) return null;
+  return (
+    <div className="history-tooltip">
+      <strong>{row.time}</strong>
+      <span>{t("power")} · {typeof row.power === "number" ? `${row.power.toFixed(2)}W` : "N/A"}</span>
+      <span>{t("thermalPeak")} · {formatTemperatureTooltip(row.temperature)}</span>
+      {row.state ? <i className={`state-dot port-${row.state}`}>{t(portRuntimeStateLabelKey(row.state))}</i> : null}
+    </div>
+  );
+}
+
+function PortMetricTooltip({
+  active,
+  dataKey,
+  payload,
+  unit,
+}: {
+  active?: boolean;
+  dataKey: "voltage" | "current";
+  payload?: Array<{ payload?: { current?: number | string | null; state?: PortRuntimeState; time: string; voltage?: number | string | null } }>;
+  unit: string;
+}) {
+  const { t } = useI18n();
+  if (!active) return null;
+  const row = payload?.[0]?.payload;
+  if (!row) return null;
+  const value = row[dataKey];
+  return (
+    <div className="history-tooltip">
+      <strong>{row.time}</strong>
+      <span>{t(dataKey)} · {typeof value === "number" ? `${value.toFixed(3)}${unit}` : "N/A"}</span>
+      {row.state ? <i className={`state-dot port-${row.state}`}>{t(portRuntimeStateLabelKey(row.state))}</i> : null}
     </div>
   );
 }

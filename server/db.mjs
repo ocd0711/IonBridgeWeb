@@ -114,9 +114,9 @@ export function createStore({ databasePath, defaultIntervalMs, retentionDays }) 
     }
     const insert = db.prepare(`
       INSERT INTO samples (
-        device_key, target, ts, port, voltage, current, temperature_c, power_w, attached, protocol
+        device_key, target, ts, port, voltage, current, temperature_c, power_w, active, attached, state, protocol
       ) VALUES (
-        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
       )
     `);
     db.exec("BEGIN");
@@ -131,7 +131,9 @@ export function createStore({ databasePath, defaultIntervalMs, retentionDays }) 
           row.current,
           row.temperature_c,
           row.power_w,
+          row.active,
           row.attached,
+          row.state,
           row.protocol,
         );
       }
@@ -178,18 +180,18 @@ export function createStore({ databasePath, defaultIntervalMs, retentionDays }) 
   function queryHistory({ deviceKey, start, end, portFilter }) {
     if (!deviceKey) return [];
     const sql = portFilter
-      ? `SELECT ts, target, port, voltage, current, temperature_c, power_w, attached, protocol
+      ? `SELECT ts, target, port, voltage, current, temperature_c, power_w, active, attached, state, protocol
          FROM samples
          WHERE device_key = ? AND port = ? AND ts >= ? AND ts <= ?
          ORDER BY ts ASC`
-      : `SELECT ts, target, port, voltage, current, temperature_c, power_w, attached, protocol
+      : `SELECT ts, target, port, voltage, current, temperature_c, power_w, active, attached, state, protocol
          FROM samples
          WHERE device_key = ? AND ts >= ? AND ts <= ?
          ORDER BY ts ASC`;
     const rows = portFilter
       ? db.prepare(sql).all(deviceKey, Number(portFilter), start, end)
       : db.prepare(sql).all(deviceKey, start, end);
-    return rows.map((row) => ({ ...row, attached: Boolean(row.attached) }));
+    return rows.map((row) => ({ ...row, active: Boolean(row.active), attached: Boolean(row.attached) }));
   }
 
   function sampleCounts() {
@@ -278,7 +280,9 @@ function openDatabase(path) {
       current INTEGER,
       temperature_c REAL,
       power_w REAL,
+      active INTEGER,
       attached INTEGER,
+      state TEXT,
       protocol TEXT
     );
   `);
@@ -295,7 +299,9 @@ function openDatabase(path) {
         current INTEGER,
         temperature_c REAL,
         power_w REAL,
+        active INTEGER DEFAULT 0,
         attached INTEGER,
+        state TEXT DEFAULT '',
         protocol TEXT
       );
       INSERT INTO samples_v2 (
@@ -311,6 +317,8 @@ function openDatabase(path) {
       ALTER TABLE samples_v2 RENAME TO samples;
     `);
   }
+  addColumnIfMissing(database, "samples", "active INTEGER");
+  addColumnIfMissing(database, "samples", "state TEXT");
   database.exec(`
     CREATE INDEX IF NOT EXISTS idx_samples_device_ts ON samples(device_key, ts);
     CREATE INDEX IF NOT EXISTS idx_samples_device_port_ts ON samples(device_key, port, ts);
@@ -386,6 +394,13 @@ function tableColumns(database, table) {
 function tableHasRequiredColumns(database, table, columns) {
   const names = new Set(tableColumns(database, table).map((column) => column.name));
   return columns.every((column) => names.has(column));
+}
+
+function addColumnIfMissing(database, table, definition) {
+  const columnName = definition.trim().split(/\s+/, 1)[0];
+  if (!tableHasRequiredColumns(database, table, [columnName])) {
+    database.exec(`ALTER TABLE ${table} ADD COLUMN ${definition}`);
+  }
 }
 
 function columnIsNotNull(database, table, columnName) {

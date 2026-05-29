@@ -90,11 +90,13 @@ describe("offline dashboard fallback", () => {
             ts: 1000,
             target: "http://device.local",
             port: 1,
+            active: true,
+            attached: true,
             voltage: 9000,
             current: 2000000,
+            state: "ATTACHED",
             temperature_c: 42,
             power_w: 18,
-            attached: true,
             protocol: "PD",
           },
         ],
@@ -107,6 +109,8 @@ describe("offline dashboard fallback", () => {
     expect(dashboard.source).toBe("offline");
     expect(dashboard.metrics.ports).toHaveLength(1);
     expect(dashboard.metrics.ports[0].id).toBe(1);
+    expect(dashboard.metrics.ports[0].state).toBe("ATTACHED");
+    expect(dashboard.history.ports[0].samples[0].state).toBe("ATTACHED");
     expect(dashboard.history.ports[0].samples[0].temperature_c).toBe(42);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
@@ -179,11 +183,13 @@ describe("online dashboard history", () => {
               ts: sampleTs,
               target: "http://device.local",
               port: 1,
+              active: true,
+              attached: true,
               voltage: 9000,
               current: 1000000,
+              state: "ATTACHED",
               temperature_c: 55,
               power_w: 9,
-              attached: true,
               protocol: "PD",
             },
           ],
@@ -198,6 +204,7 @@ describe("online dashboard history", () => {
     const historicalSample = dashboard.history.ports[0].samples.find((sample) => sample.ts === sampleTs);
 
     expect(historicalSample?.temperature_c).toBe(55);
+    expect(historicalSample?.state).toBe("ATTACHED");
   });
 
   it("keeps live power history when metrics omit temperature", async () => {
