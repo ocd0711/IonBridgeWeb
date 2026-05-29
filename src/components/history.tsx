@@ -42,10 +42,14 @@ function portRuntimeStateLabelKey(state: PortRuntimeState): TranslationKey {
   }[state] as TranslationKey;
 }
 
-type HistoryStateCount = { count: number; state: PortRuntimeState };
+type HistoryPortState = {
+  port: number;
+  power: number;
+  state: PortRuntimeState;
+};
 type ServerHistoryChartRow = {
+  ports?: HistoryPortState[];
   power: number | null;
-  states?: HistoryStateCount[];
   temperature: number | null;
   time: string;
   ts: number;
@@ -170,11 +174,13 @@ export function LongHistoryPanel({
         ts,
         target: targetUrl,
         port: port.id,
+        active: port.active,
+        attached: port.attached,
         voltage: port.voltage,
         current: port.current,
+        state: port.state,
         temperature_c: validTemperature(port.die_temperature),
         power_w: watts(port),
-        attached: port.attached,
         protocol: String(port.fc_protocol),
       }));
     if (statusRef.current === "loading") {
@@ -350,10 +356,12 @@ function ServerHistoryTooltip({
       <strong>{row.time}</strong>
       <span>{t("power")} · {formatPowerTooltip(row.power)}</span>
       <span>{t("thermalPeak")} · {formatTemperatureTooltip(row.temperature)}</span>
-      {row.states && row.states.length > 0 ? (
+      {row.ports && row.ports.length > 0 ? (
         <div className="history-tooltip-states">
-          {row.states.map((item) => (
-            <i key={item.state} className={`state-dot port-${item.state}`}>{t(portRuntimeStateLabelKey(item.state))} {item.count}</i>
+          {row.ports.map((item) => (
+            <i key={item.port} className={`state-dot port-${item.state}`}>
+              {item.port === 0 ? "A" : `C${item.port}`} · {t(portRuntimeStateLabelKey(item.state))} · {formatPowerTooltip(item.power)}
+            </i>
           ))}
         </div>
       ) : null}
@@ -380,13 +388,13 @@ function mergeServerHistoryRows(rows: ServerHistoryRow[]) {
 export function buildServerHistoryChartRows(rows: ServerHistoryRow[]) {
   const bucketMs = chooseHistoryBucketMs(rows);
   const buckets = new Map<number, {
-    states: Map<PortRuntimeState, number>;
+    ports: Map<number, HistoryPortState & { ts: number }>;
     timeline: Map<number, { power: number; temperature: number | null }>;
   }>();
   for (const row of rows) {
     const bucket = Math.floor(row.ts / bucketMs) * bucketMs;
     const bucketRows = buckets.get(bucket) ?? {
-      states: new Map<PortRuntimeState, number>(),
+      ports: new Map<number, HistoryPortState & { ts: number }>(),
       timeline: new Map<number, { power: number; temperature: number | null }>(),
     };
     const existing = bucketRows.timeline.get(row.ts) ?? { power: 0, temperature: null };
@@ -396,7 +404,15 @@ export function buildServerHistoryChartRows(rows: ServerHistoryRow[]) {
       ? existing.temperature
       : Math.max(existing.temperature ?? temperature, temperature);
     const state = sampleRuntimeState(row);
-    bucketRows.states.set(state, (bucketRows.states.get(state) ?? 0) + 1);
+    const previousPort = bucketRows.ports.get(row.port);
+    if (!previousPort || row.ts >= previousPort.ts) {
+      bucketRows.ports.set(row.port, {
+        port: row.port,
+        power: row.power_w,
+        state,
+        ts: row.ts,
+      });
+    }
     bucketRows.timeline.set(row.ts, existing);
     buckets.set(bucket, bucketRows);
   }
@@ -415,10 +431,10 @@ export function buildServerHistoryChartRows(rows: ServerHistoryRow[]) {
           second: "2-digit",
           hour12: false,
         }),
+        ports: Array.from(bucket.ports.values())
+          .sort((a, b) => a.port - b.port)
+          .map(({ port, power, state }) => ({ port, power, state })),
         power: values.reduce((sum, value) => sum + value.power, 0) / Math.max(values.length, 1),
-        states: Array.from(bucket.states.entries())
-          .map(([state, count]) => ({ count, state }))
-          .sort((a, b) => b.count - a.count),
         temperature: maxValidTemperature(values.map((value) => value.temperature)),
       };
     });
@@ -431,8 +447,8 @@ function insertHistoryGaps(rows: ServerHistoryChartRow[], bucketMs: number) {
   for (const row of rows) {
     const previous = result[result.length - 1];
     if (previous && row.ts - previous.ts > bucketMs * 2.5) {
-      result.push({ ...previous, power: null, states: [], temperature: null });
-      result.push({ ...row, power: null, states: [], temperature: null });
+      result.push({ ...previous, ports: [], power: null, temperature: null });
+      result.push({ ...row, ports: [], power: null, temperature: null });
     }
     result.push(row);
   }
