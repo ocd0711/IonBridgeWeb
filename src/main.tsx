@@ -604,7 +604,7 @@ function PortCard({
       </div>
       <div className="budget-row">
         <span>{t("portLimit")} {port.power_budget}W</span>
-        <span>{formatDuration(port.charging_duration_seconds)}</span>
+        <span>{t("portSessionShort")} {formatDuration(port.charging_duration_seconds)}</span>
       </div>
     </article>
   );
