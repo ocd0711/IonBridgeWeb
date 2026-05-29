@@ -152,9 +152,10 @@ export function LongHistoryPanel({
   const avgPower = powerValues.reduce((sum, value) => sum + value, 0) / Math.max(powerValues.length, 1);
   const maxPower = powerValues.length > 0 ? Math.max(...powerValues) : 0;
   const maxTemp = maxValidTemperature(chartRows.map((row) => row.temperature));
+  const canShowChart = status === "ready" || (status === "loading" && rows.length > 0);
 
   return (
-    <section className="panel long-history-panel" id="history">
+    <section className="panel long-history-panel" id="history" aria-busy={status === "loading"}>
       <div className="panel-header long-history-head">
         <div>
           <p>{t("serverHistory")}</p>
@@ -206,53 +207,66 @@ export function LongHistoryPanel({
         </div>
       </div>
 
-      {status === "ready" ? (
+      {canShowChart ? (
         <>
-          <ResponsiveContainer width="100%" height={280}>
-            <ComposedChart data={chartRows} margin={{ top: 10, right: 12, left: -18, bottom: 0 }}>
-              <defs>
-                <linearGradient id="serverHistoryFill" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#f47b20" stopOpacity={0.4} />
-                  <stop offset="100%" stopColor="#f47b20" stopOpacity={0.03} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid stroke="#e6dfd4" vertical={false} />
-              <XAxis dataKey="time" tickLine={false} axisLine={false} tick={{ fill: "#766b5f", fontSize: 12 }} />
-              <YAxis yAxisId="power" tickLine={false} axisLine={false} tick={{ fill: "#766b5f", fontSize: 12 }} />
-              <YAxis
-                yAxisId="temperature"
-                orientation="right"
-                tickLine={false}
-                axisLine={false}
-                tick={{ fill: "#9c4f22", fontSize: 12 }}
-              />
-              <Tooltip
-                contentStyle={{ border: "1px solid #2e2823", borderRadius: 8 }}
-                formatter={(value, name) => name === "temperature" ? formatTemperatureTooltip(value) : formatPowerTooltip(value)}
-              />
-              <Area
-                dataKey="power"
-                dot={false}
-                fill="url(#serverHistoryFill)"
-                isAnimationActive={false}
-                stroke="#f47b20"
-                strokeWidth={2.5}
-                type="monotone"
-                yAxisId="power"
-              />
-              <Line
-                dataKey="temperature"
-                dot={false}
-                isAnimationActive={false}
-                name="temperature"
-                stroke="#7f6d52"
-                strokeDasharray="5 5"
-                strokeWidth={2}
-                type="monotone"
-                yAxisId="temperature"
-              />
-            </ComposedChart>
-          </ResponsiveContainer>
+          <div className="history-chart-shell">
+            <ResponsiveContainer width="100%" height={280}>
+              <ComposedChart data={chartRows} margin={{ top: 10, right: 12, left: -18, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="serverHistoryFill" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#f47b20" stopOpacity={0.4} />
+                    <stop offset="100%" stopColor="#f47b20" stopOpacity={0.03} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid stroke="var(--chart-grid)" vertical={false} />
+                <XAxis dataKey="time" tickLine={false} axisLine={false} tick={{ fill: "var(--chart-axis)", fontSize: 12 }} />
+                <YAxis yAxisId="power" tickLine={false} axisLine={false} tick={{ fill: "var(--chart-axis)", fontSize: 12 }} />
+                <YAxis
+                  yAxisId="temperature"
+                  orientation="right"
+                  tickLine={false}
+                  axisLine={false}
+                  tick={{ fill: "var(--amber-deep)", fontSize: 12 }}
+                />
+                <Tooltip
+                  contentStyle={{
+                    background: "var(--chart-tooltip-bg)",
+                    border: "1px solid var(--chart-tooltip-border)",
+                    borderRadius: 8,
+                    color: "var(--chart-tooltip-ink)",
+                  }}
+                  formatter={(value, name) => name === "temperature" ? formatTemperatureTooltip(value) : formatPowerTooltip(value)}
+                />
+                <Area
+                  dataKey="power"
+                  dot={false}
+                  fill="url(#serverHistoryFill)"
+                  isAnimationActive={false}
+                  stroke="#f47b20"
+                  strokeWidth={2.5}
+                  type="monotone"
+                  yAxisId="power"
+                />
+                <Line
+                  dataKey="temperature"
+                  dot={false}
+                  isAnimationActive={false}
+                  name="temperature"
+                  stroke="#7f6d52"
+                  strokeDasharray="5 5"
+                  strokeWidth={2}
+                  type="monotone"
+                  yAxisId="temperature"
+                />
+              </ComposedChart>
+            </ResponsiveContainer>
+            {status === "loading" ? (
+              <div className="history-loading-overlay" role="status">
+                <span />
+                <strong>{t("readingHistory")}</strong>
+              </div>
+            ) : null}
+          </div>
           <div className="history-stats">
             <span>{t("samples")} {rows.length}</span>
             <span>{t("avg")} {avgPower.toFixed(2)}W</span>
@@ -261,7 +275,8 @@ export function LongHistoryPanel({
           </div>
         </>
       ) : (
-        <div className="history-empty">
+        <div className={`history-empty ${status === "loading" ? "history-loading-skeleton" : ""}`}>
+          {status === "loading" ? <i aria-hidden="true" /> : null}
           <strong>
             {status === "loading"
               ? t("readingHistory")

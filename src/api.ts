@@ -227,6 +227,15 @@ async function fetchRecentServerHistory(targetUrl: string, deviceKey?: string | 
   }
 }
 
+async function fetchRollingServerHistory(targetUrl: string, deviceKey?: string | null): Promise<ServerHistoryRow[]> {
+  try {
+    return fetchServerHistory({ targetUrl, deviceKey, hours: 1, port: null });
+  } catch (error) {
+    if (isAuthRequiredError(error)) throw error;
+    return [];
+  }
+}
+
 async function getJson<T>(path: string, targetUrl: string, timeoutMs = REQUEST_TIMEOUT_MS, deviceKey?: string | null): Promise<T> {
   const response = await fetchWithTimeout(endpoint(path, targetUrl, deviceKey), timeoutMs);
   if (!response.ok) {
@@ -298,8 +307,9 @@ export async function fetchDashboardData(targetUrl = DEFAULT_DEVICE_TARGET, devi
   const normalizedTarget = normalizeDeviceTarget(targetUrl);
   try {
     const metrics = await getJsonWithRetry<Metrics>("/metrics.json", normalizedTarget, METRICS_TIMEOUT_MS, deviceKey);
-    const [history, heap, machineInfo] = await Promise.all([
+    const [history, serverRows, heap, machineInfo] = await Promise.all([
       getJson<PortHistory>(`/porthistoryz?limit=${HISTORY_LIMIT}`, normalizedTarget, REQUEST_TIMEOUT_MS, deviceKey).catch(() => liveOnlyHistory(metrics)),
+      fetchRollingServerHistory(normalizedTarget, deviceKey),
       getJson<HeapMetrics>("/heapz", normalizedTarget, REQUEST_TIMEOUT_MS, deviceKey).catch(() => mockHeap),
       getMachineInfoWithRetry(normalizedTarget, deviceKey)
         .then((info) => {
@@ -309,7 +319,11 @@ export async function fetchDashboardData(targetUrl = DEFAULT_DEVICE_TARGET, devi
         .catch(() => readCachedMachineInfo(normalizedTarget) ?? inferMachineInfo(metrics)),
     ]);
 
-    return { metrics, history: mergeHistory(history, metrics, normalizedTarget), heap, machineInfo, source: "device" };
+    const mergedDeviceHistory = mergeHistory(history, metrics, normalizedTarget);
+    const mergedHistory = serverRows.length > 0
+      ? mergeHistory(historyFromServerRows(serverRows), metrics, normalizedTarget)
+      : mergedDeviceHistory;
+    return { metrics, history: mergedHistory, heap, machineInfo, source: "device" };
   } catch (error) {
     if (isAuthRequiredError(error)) throw error;
     return fetchOfflineDashboardData(normalizedTarget, deviceKey);
@@ -520,7 +534,11 @@ function mergeSamples(
   for (const sample of merged) {
     const last = deduped[deduped.length - 1];
     if (last && Math.abs(last.ts - sample.ts) < 1000) {
-      deduped[deduped.length - 1] = sample;
+      deduped[deduped.length - 1] = {
+        ...last,
+        ...sample,
+        temperature_c: sample.temperature_c ?? last.temperature_c,
+      };
     } else {
       deduped.push(sample);
     }

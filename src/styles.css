@@ -1974,6 +1974,41 @@ h1 {
   padding-top: 12px;
 }
 
+.history-chart-shell {
+  position: relative;
+  min-height: 280px;
+}
+
+.history-loading-overlay {
+  position: absolute;
+  right: 14px;
+  top: 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  background: rgba(255, 253, 250, 0.88);
+  padding: 8px 12px;
+  color: var(--muted);
+  box-shadow: 0 12px 26px rgba(68, 52, 38, 0.12);
+  backdrop-filter: blur(10px);
+}
+
+.history-loading-overlay span {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--amber-strong);
+  box-shadow: 0 0 0 0 rgba(244, 123, 32, 0.45);
+  animation: historyPulse 1.2s ease-out infinite;
+}
+
+.history-loading-overlay strong {
+  font-size: 12px;
+  font-weight: 900;
+}
+
 .history-stats span {
   border: 1px solid rgba(40, 35, 31, 0.08);
   border-radius: 8px;
@@ -1988,10 +2023,29 @@ h1 {
 .history-empty {
   display: grid;
   gap: 7px;
+  min-height: 168px;
   border: 1px dashed rgba(40, 35, 31, 0.18);
   border-radius: 8px;
   background: rgba(246, 243, 237, 0.58);
   padding: 22px;
+}
+
+.history-loading-skeleton {
+  position: relative;
+  overflow: hidden;
+  align-content: end;
+}
+
+.history-loading-skeleton i {
+  position: absolute;
+  inset: 22px;
+  border-radius: 6px;
+  opacity: 0.72;
+  background:
+    linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.52), transparent) -120px 0 / 120px 100% no-repeat,
+    linear-gradient(rgba(40, 35, 31, 0.08) 1px, transparent 1px) 0 0 / 100% 34px,
+    linear-gradient(90deg, rgba(244, 123, 32, 0.18), rgba(244, 123, 32, 0.02));
+  animation: historyScan 1.35s ease-in-out infinite;
 }
 
 .history-empty strong {
@@ -2003,6 +2057,31 @@ h1 {
   color: var(--muted);
   font-size: 13px;
   font-weight: 700;
+}
+
+@keyframes historyPulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(244, 123, 32, 0.45);
+  }
+  100% {
+    box-shadow: 0 0 0 12px rgba(244, 123, 32, 0);
+  }
+}
+
+@keyframes historyScan {
+  0% {
+    background-position: -120px 0, 0 0, 0 0;
+  }
+  100% {
+    background-position: calc(100% + 120px) 0, 0 0, 0 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .history-loading-overlay span,
+  .history-loading-skeleton i {
+    animation: none;
+  }
 }
 
 .runtime-panel {
@@ -2367,6 +2446,18 @@ h1 {
     background: rgba(26, 23, 20, 0.88);
     border-color: rgba(255, 255, 255, 0.09);
     color: var(--ink);
+  }
+
+  .history-loading-overlay {
+    background: rgba(33, 29, 25, 0.88);
+    box-shadow: 0 14px 28px rgba(0, 0, 0, 0.3);
+  }
+
+  .history-loading-skeleton i {
+    background:
+      linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.13), transparent) -120px 0 / 120px 100% no-repeat,
+      linear-gradient(rgba(255, 255, 255, 0.08) 1px, transparent 1px) 0 0 / 100% 34px,
+      linear-gradient(90deg, rgba(255, 118, 27, 0.12), rgba(255, 118, 27, 0.02));
   }
 
   .port-history-grid button {

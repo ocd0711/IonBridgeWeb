@@ -561,7 +561,7 @@ function SummaryStrip({
       <SummaryItem icon={<Zap size={18} />} label={t("totalPower")} value={`${totalPower.toFixed(1)}W`} detail={`${profile.totalPowerBudgetW}W ${t("modelMax")}`} />
       <SummaryItem icon={<Gauge size={18} />} label={t("thermalPeak")} value={`${Math.max(...metrics.ports.map((p) => p.die_temperature))}C`} detail={t("thermalDetail")} />
       <SummaryItem icon={<HardDrive size={18} />} label={t("heapUsed")} value={`${Math.round(heapUsed * 100)}%`} detail={`${Math.round(heap.total_free / 1024)}KB ${t("available")}`} />
-      <SummaryItem icon={<Cpu size={18} />} label={t("runtime")} value={`${Math.floor(metrics.system.boot_time_seconds / 60)}m`} detail={metrics.system.app_version} />
+      <SummaryItem icon={<Cpu size={18} />} label={t("runtime")} value={formatDuration(metrics.system.boot_time_seconds)} detail={metrics.system.app_version} />
     </section>
   );
 }
