@@ -6,6 +6,71 @@ export const portLabel = (port: PortMetrics) =>
 export const watts = (port: PortMetrics) =>
   (port.voltage * port.current) / 1_000_000;
 
+export const PORT_IDLE_WATTS = 0.05;
+
+export type PortRuntimeState =
+  | "attached"
+  | "no-power"
+  | "off"
+  | "ready"
+  | "switching"
+  | "protecting"
+  | "recovering"
+  | "fault";
+
+const switchingPortStates = new Set(["BOOTING", "OPENING", "CLOSING", "DETACHING"]);
+const protectingPortStates = new Set(["OVER_TEMP_WARNING", "OVER_TEMP_ALERT", "COOLING", "LIMITED_POWER", "POWER_LIMITING"]);
+const recoveringPortStates = new Set(["CHECKING", "RECOVERING"]);
+const faultPortStates = new Set(["UNKNOWN", "DEAD"]);
+
+function runtimeStateFromValues({
+  active,
+  attached,
+  power,
+  state,
+}: {
+  active?: boolean | null;
+  attached?: boolean | null;
+  power: number;
+  state?: string | null;
+}): PortRuntimeState {
+  const normalizedState = state ?? "";
+  if (normalizedState ? normalizedState === "INACTIVE" : active === false) return "off";
+  if (switchingPortStates.has(normalizedState)) return "switching";
+  if (protectingPortStates.has(normalizedState)) return "protecting";
+  if (recoveringPortStates.has(normalizedState)) return "recovering";
+  if (faultPortStates.has(normalizedState)) return "fault";
+  const isAttached = attached ?? power >= PORT_IDLE_WATTS;
+  if (isAttached && power < PORT_IDLE_WATTS) return "no-power";
+  if (isAttached) return "attached";
+  return "ready";
+}
+
+export const isPortOff = (port: PortMetrics) =>
+  port.state ? port.state === "INACTIVE" : port.active === false;
+
+export const portRuntimeState = (port: PortMetrics): PortRuntimeState =>
+  runtimeStateFromValues({
+    active: port.active,
+    attached: port.attached,
+    power: watts(port),
+    state: port.state,
+  });
+
+export const sampleRuntimeState = (sample: {
+  active?: boolean | null;
+  attached?: boolean | null;
+  current: number;
+  state?: string | null;
+  voltage: number;
+}): PortRuntimeState =>
+  runtimeStateFromValues({
+    active: sample.active,
+    attached: sample.attached,
+    power: (sample.voltage * sample.current) / 1_000_000,
+    state: sample.state,
+  });
+
 export const volts = (millivolts: number) => millivolts / 1000;
 
 export const amps = (milliamps: number) => milliamps / 1000;

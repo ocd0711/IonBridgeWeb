@@ -36,6 +36,8 @@ import {
   maxTemperature,
   milliwattHours,
   portLabel,
+  portRuntimeState,
+  type PortRuntimeState,
   protocolName,
   temperatureLevel,
   volts,
@@ -70,6 +72,8 @@ import { registerPwa } from "./pwa";
 import { appVersion } from "./version";
 import "./styles.css";
 
+const NO_POWER_CONFIRM_SAMPLES = 2;
+
 function useServerSettings() {
   const [ready, setReady] = React.useState(false);
   const [passwordRequired, setPasswordRequired] = React.useState(false);
@@ -93,8 +97,46 @@ function useServerSettings() {
   return { ready, passwordRequired, serverSession: session, setPasswordRequired, setServerSession: setSession };
 }
 
+function useStablePortRuntimeStates(ports: PortMetrics[]) {
+  const stateRef = React.useRef(new Map<number, {
+    raw: PortRuntimeState;
+    stable: PortRuntimeState;
+    noPowerSamples: number;
+  }>());
+
+  return React.useMemo(() => {
+    const nextRef = new Map<number, {
+      raw: PortRuntimeState;
+      stable: PortRuntimeState;
+      noPowerSamples: number;
+    }>();
+    const stableStates = new Map<number, PortRuntimeState>();
+
+    ports.forEach((port) => {
+      const raw = portRuntimeState(port);
+      const previous = stateRef.current.get(port.id);
+      const noPowerSamples = raw === "no-power"
+        ? previous?.raw === "no-power"
+          ? previous.noPowerSamples + 1
+          : 1
+        : 0;
+      const stable = raw === "no-power" &&
+        previous?.stable === "attached" &&
+        noPowerSamples < NO_POWER_CONFIRM_SAMPLES
+        ? "attached"
+        : raw;
+
+      nextRef.set(port.id, { raw, stable, noPowerSamples });
+      stableStates.set(port.id, stable);
+    });
+
+    stateRef.current = nextRef;
+    return stableStates;
+  }, [ports]);
+}
+
 function AppFooter() {
-  return <footer className="app-footer">IonBridgeWeb · Web v{appVersion}</footer>;
+  return <footer className="app-footer">IonBridgeWeb · Web {appVersion}</footer>;
 }
 
 function Header({
@@ -524,16 +566,34 @@ function TargetSetupScreen({
   );
 }
 
-function PortCard({ port }: { port: PortMetrics }) {
+function PortCard({
+  port,
+  runtimeState = portRuntimeState(port),
+  isPeak = false,
+}: {
+  port: PortMetrics;
+  runtimeState?: PortRuntimeState;
+  isPeak?: boolean;
+}) {
   const { t } = useI18n();
+  const stateLabel = {
+    attached: t("attached"),
+    fault: t("portFault"),
+    "no-power": t("noPower"),
+    off: t("portOff"),
+    protecting: t("portProtecting"),
+    ready: t("ready"),
+    recovering: t("portRecovering"),
+    switching: t("portSwitching"),
+  }[runtimeState];
   return (
-    <article className={`port-card ${temperatureLevel(port.die_temperature)} ${port.id === 4 ? "side-card" : ""}`}>
+    <article className={`port-card ${temperatureLevel(port.die_temperature)} port-${runtimeState} ${isPeak ? "peak-port" : ""} ${port.id === 4 ? "side-card" : ""}`}>
       <div className="port-card-top">
         <div>
           <p>{port.id === 4 ? `USB-C · ${t("sideSuffix")}` : port.port_type === "A" ? "USB-A" : "USB-C"}</p>
           <h2>{portLabel(port)}</h2>
         </div>
-        <span className="state-dot">{port.attached ? t("attached") : t("idle")}</span>
+        <span className="state-dot">{stateLabel}</span>
       </div>
       <div className="power-number">{watts(port).toFixed(1)}W</div>
       <div className="port-grid">
@@ -625,6 +685,33 @@ function ProfileSwitcher({
             <strong>{profile.variant.toUpperCase()}</strong>
             {profile.key === detectedProfile.key ? <em>{t("detected")}</em> : null}
           </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function PortStateGuide() {
+  const { t } = useI18n();
+  const states: Array<{ className: string; label: TranslationKey; hint: TranslationKey }> = [
+    { className: "port-attached", label: "attached", hint: "portAttachedHint" },
+    { className: "port-no-power", label: "noPower", hint: "portNoPowerHint" },
+    { className: "port-ready", label: "ready", hint: "portReadyHint" },
+    { className: "port-off", label: "portOff", hint: "portOffHint" },
+    { className: "port-switching", label: "portSwitching", hint: "portSwitchingHint" },
+    { className: "port-protecting", label: "portProtecting", hint: "portProtectingHint" },
+    { className: "port-recovering", label: "portRecovering", hint: "portRecoveringHint" },
+    { className: "port-fault", label: "portFault", hint: "portFaultHint" },
+  ];
+
+  return (
+    <section className="port-state-guide" aria-label={t("portStateLegend")}>
+      <p>{t("portStateLegend")}</p>
+      <div>
+        {states.map((state) => (
+          <span key={state.className} className={state.className} title={t(state.hint)}>
+            <i className="state-dot">{t(state.label)}</i>
+          </span>
         ))}
       </div>
     </section>
@@ -747,6 +834,7 @@ function App() {
     },
     t: (key: TranslationKey) => translate(language, key),
   }), [language]);
+  const stablePortStates = useStablePortRuntimeStates(data && data.source !== "mock" ? data.metrics.ports : []);
 
   async function runConnectionAction(action: () => Promise<void>) {
     if (connectionActionPendingRef.current) return;
@@ -896,6 +984,7 @@ function App() {
   const activeProfile =
     deviceProfiles.find((profile) => profile.key === (showAppearanceSwitcher ? activeProfileKey ?? detectedProfile.key : detectedProfile.key)) ??
     detectedProfile;
+  const peakPortPower = Math.max(...metrics.ports.filter((port) => stablePortStates.get(port.id) === "attached").map(watts), 0);
 
   return (
     <I18nContext.Provider value={i18n}>
@@ -916,7 +1005,7 @@ function App() {
           onDeleteTarget={handleDeleteSavedTarget}
           onUpdateTargetNote={handleSavedTargetNoteUpdate}
         />
-        <DeviceFace history={history} metrics={metrics} profile={activeProfile} />
+        <DeviceFace history={history} metrics={metrics} portStates={stablePortStates} profile={activeProfile} />
         {showAppearanceSwitcher ? (
           <ProfileSwitcher
             activeProfile={activeProfile}
@@ -925,9 +1014,15 @@ function App() {
           />
         ) : null}
         <SummaryStrip heap={heap} metrics={metrics} profile={activeProfile} />
+        <PortStateGuide />
         <section className="ports-grid" aria-label={i18n.t("portTelemetry")}>
           {metrics.ports.map((port) => (
-            <PortCard key={port.id} port={port} />
+            <PortCard
+              key={port.id}
+              port={port}
+              runtimeState={stablePortStates.get(port.id)}
+              isPeak={peakPortPower > 0 && watts(port) === peakPortPower}
+            />
           ))}
         </section>
         <section className="dashboard-grid">

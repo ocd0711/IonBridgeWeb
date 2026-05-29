@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 
 import type { DeviceVisualProfile } from "../deviceProfiles";
-import { portLabel, watts } from "../format";
+import { portLabel, portRuntimeState, watts, type PortRuntimeState } from "../format";
 import { useI18n } from "../i18n";
 import type { Metrics, PortHistory, PortMetrics } from "../types";
 
@@ -73,10 +73,12 @@ export function DeviceFace({
   metrics,
   history,
   profile,
+  portStates,
 }: {
   metrics: Metrics;
   history: PortHistory;
   profile: DeviceVisualProfile;
+  portStates?: Map<number, PortRuntimeState>;
 }) {
   const { t } = useI18n();
   const frontPorts = profile.frontPortIds
@@ -145,7 +147,7 @@ export function DeviceFace({
               <div className="port-rail" style={{ "--front-ports": frontPorts.length } as React.CSSProperties}>
                 <div className="rail-label">{profile.powerLabel}</div>
                 {frontPorts.map((port) => (
-                  <DevicePort key={port.id} port={port} />
+                  <DevicePort key={port.id} port={port} runtimeState={portStates?.get(port.id)} />
                 ))}
               </div>
             </div>
@@ -153,7 +155,7 @@ export function DeviceFace({
           {sidePorts.length > 0 ? (
             <div className="side-port-dock">
               {sidePorts.map((port) => (
-                <SidePortFace key={port.id} port={port} profile={profile} />
+                <SidePortFace key={port.id} port={port} profile={profile} runtimeState={portStates?.get(port.id)} />
               ))}
             </div>
           ) : null}
@@ -201,27 +203,50 @@ function MirrorLogo({ profile }: { profile: DeviceVisualProfile }) {
   );
 }
 
-function DevicePort({ port }: { port: PortMetrics }) {
+function DevicePort({ port, runtimeState = portRuntimeState(port) }: { port: PortMetrics; runtimeState?: PortRuntimeState }) {
+  const { t } = useI18n();
   const isA = port.port_type === "A";
+  const power = watts(port);
+  const powerStrength = Math.max(0.18, Math.min(1, power / Math.max(port.power_budget || 1, 1)));
+  const stateLabel = {
+    attached: t("portAttachedShort"),
+    fault: t("portFaultShort"),
+    "no-power": t("portNoPowerShort"),
+    off: t("portOffShort"),
+    protecting: t("portProtectingShort"),
+    ready: t("portReadyShort"),
+    recovering: t("portRecoveringShort"),
+    switching: t("portSwitchingShort"),
+  }[runtimeState];
 
   return (
-    <div className={`device-port ${isA ? "type-a" : "type-c"} ${port.attached ? "attached" : ""}`}>
+    <div
+      className={`device-port ${isA ? "type-a" : "type-c"} ${runtimeState}`}
+      style={{
+        "--port-energy": runtimeState === "attached"
+          ? powerStrength
+          : runtimeState === "no-power" || runtimeState === "protecting" || runtimeState === "recovering"
+            ? 0.08
+            : 0,
+      } as React.CSSProperties}
+    >
       <div className="port-hole">
         <span />
       </div>
       <strong>{portLabel(port)}</strong>
-      <small>{watts(port).toFixed(1)}W</small>
+      <small>{power.toFixed(1)}W</small>
+      <span className="device-port-state"><i />{stateLabel}</span>
     </div>
   );
 }
 
-function SidePortFace({ port, profile }: { port: PortMetrics; profile: DeviceVisualProfile }) {
+function SidePortFace({ port, profile, runtimeState }: { port: PortMetrics; profile: DeviceVisualProfile; runtimeState?: PortRuntimeState }) {
   const { t } = useI18n();
   return (
     <aside className="side-port-face" aria-label={t("sideC4")}>
       <div className="side-seam" />
       <div className="side-brand">{profile.sidePortLabel}</div>
-      <DevicePort port={port} />
+      <DevicePort port={port} runtimeState={runtimeState} />
       <div className="side-caption">SIDE PORT</div>
     </aside>
   );

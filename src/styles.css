@@ -1114,6 +1114,20 @@ h1 {
   75% { opacity: 0.72; transform: scale(1); }
 }
 
+@keyframes portEnergyBreath {
+  0%,
+  100% {
+    filter: blur(0);
+    opacity: 0.62;
+    transform: translate(-50%, -68%) scale(0.94);
+  }
+  50% {
+    filter: blur(1px);
+    opacity: 1;
+    transform: translate(-50%, -68%) scale(1.08);
+  }
+}
+
 .port-rail {
   position: relative;
   display: grid;
@@ -1162,13 +1176,47 @@ h1 {
 
 .device-port {
   display: grid;
+  position: relative;
   min-width: 0;
   justify-items: center;
-  gap: 7px;
+  gap: 6px;
+}
+
+.device-port::before {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 118px;
+  height: 56px;
+  border-radius: 999px;
+  background:
+    radial-gradient(circle, rgba(255, 157, 46, calc(0.18 + var(--port-energy, 0) * 0.34)), transparent 62%);
+  content: "";
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, -68%);
+}
+
+.device-port.attached::before,
+.device-port.no-power::before,
+.device-port.protecting::before,
+.device-port.recovering::before {
+  opacity: 1;
+  animation: portEnergyBreath 2.8s ease-in-out infinite;
+}
+
+.device-port.no-power::before,
+.device-port.protecting::before,
+.device-port.recovering::before {
+  opacity: 0.38;
+  background:
+    radial-gradient(circle, rgba(255, 157, 46, 0.16), transparent 58%);
 }
 
 .port-hole {
   display: grid;
+  position: relative;
+  z-index: 1;
   width: 108px;
   height: 44px;
   place-items: center;
@@ -1190,8 +1238,57 @@ h1 {
   width: 74%;
   height: 9px;
   border-radius: 20px;
-  background: linear-gradient(180deg, #ff8d2e, #a43411);
-  box-shadow: 0 0 16px rgba(244, 123, 32, 0.48);
+  background: linear-gradient(180deg, #ffb04f, #d85a18 56%, #7a250d);
+  box-shadow:
+    0 0 calc(8px + var(--port-energy, 0) * 16px) rgba(244, 123, 32, calc(0.34 + var(--port-energy, 0) * 0.34)),
+    0 0 calc(18px + var(--port-energy, 0) * 34px) rgba(255, 157, 46, calc(var(--port-energy, 0) * 0.24));
+}
+
+.device-port.no-power .port-hole {
+  background:
+    linear-gradient(180deg, rgba(55, 49, 43, 0.98), rgba(32, 28, 24, 0.98));
+  box-shadow:
+    inset 0 0 0 5px rgba(22, 19, 16, 0.76),
+    0 1px 2px rgba(36, 30, 24, 0.18),
+    0 0 10px rgba(255, 157, 46, 0.10);
+}
+
+.device-port.ready .port-hole,
+.device-port.off .port-hole,
+.device-port.switching .port-hole,
+.device-port.recovering .port-hole,
+.device-port.fault .port-hole {
+  background:
+    linear-gradient(180deg, rgba(62, 57, 52, 0.96), rgba(37, 33, 29, 0.98));
+  box-shadow:
+    inset 0 0 0 5px rgba(22, 19, 16, 0.8),
+    0 1px 2px rgba(36, 30, 24, 0.18);
+}
+
+.device-port.no-power .port-hole span {
+  background: linear-gradient(180deg, rgba(255, 151, 47, 0.46), rgba(91, 50, 28, 0.72));
+  box-shadow: 0 0 7px rgba(255, 157, 46, 0.18);
+}
+
+.device-port.ready .port-hole span,
+.device-port.off .port-hole span,
+.device-port.switching .port-hole span,
+.device-port.recovering .port-hole span,
+.device-port.fault .port-hole span {
+  background: linear-gradient(180deg, rgba(96, 88, 78, 0.62), rgba(42, 37, 32, 0.82));
+  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.08);
+}
+
+.device-port.off .port-hole,
+.device-port.off .port-hole span {
+  opacity: 0.52;
+}
+
+.device-port.attached .port-hole,
+.device-port.no-power .port-hole,
+.device-port.protecting .port-hole,
+.device-port.recovering .port-hole {
+  border: 1px solid rgba(255, 157, 46, calc(0.18 + var(--port-energy, 0) * 0.22));
 }
 
 .device-port.type-a .port-hole span {
@@ -1200,19 +1297,132 @@ h1 {
 }
 
 .device-port strong {
-  color: #2b2925;
-  font-size: 13px;
+  position: relative;
+  z-index: 1;
+  color: rgba(43, 41, 37, 0.82);
+  font-family: "SF Mono", "Cascadia Code", monospace;
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.42);
 }
 
 .device-port small {
-  min-height: 21px;
-  border-radius: 4px;
-  background: rgba(255, 253, 250, 0.52);
-  padding: 2px 6px;
-  color: #3b332c;
+  position: relative;
+  z-index: 1;
+  min-height: 16px;
+  color: rgba(43, 41, 37, 0.72);
   font-family: "SF Mono", "Cascadia Code", monospace;
-  font-size: 11px;
-  font-weight: 800;
+  font-size: 10px;
+  font-weight: 900;
+  line-height: 1.2;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.42);
+}
+
+.device-port-state {
+  display: inline-flex;
+  position: relative;
+  z-index: 1;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 14px;
+  color: rgba(43, 41, 37, 0.50);
+  font-family: "SF Mono", "Cascadia Code", monospace;
+  font-size: 9px;
+  font-weight: 900;
+  line-height: 1;
+  text-transform: uppercase;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.30);
+}
+
+.device-port-state i {
+  width: 5px;
+  height: 5px;
+  border-radius: 99px;
+  background: rgba(118, 107, 95, 0.52);
+  box-shadow: 0 0 0 rgba(0, 0, 0, 0);
+}
+
+.device-port.attached small {
+  color: rgba(43, 41, 37, 0.88);
+  text-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.48),
+    0 0 12px rgba(255, 157, 46, calc(var(--port-energy, 0) * 0.28));
+}
+
+.device-port.attached .device-port-state {
+  color: rgba(74, 54, 34, 0.78);
+}
+
+.device-port.attached .device-port-state i {
+  background: #f47b20;
+  box-shadow: 0 0 9px rgba(244, 123, 32, 0.62);
+}
+
+.device-port.no-power strong,
+.device-port.no-power small,
+.device-port.protecting strong,
+.device-port.protecting small,
+.device-port.recovering strong,
+.device-port.recovering small {
+  color: rgba(43, 41, 37, 0.58);
+  text-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.38),
+    0 0 8px rgba(255, 157, 46, 0.10);
+}
+
+.device-port.no-power .device-port-state,
+.device-port.protecting .device-port-state {
+  color: rgba(126, 79, 32, 0.70);
+}
+
+.device-port.no-power .device-port-state i,
+.device-port.protecting .device-port-state i {
+  background: #d8862d;
+  box-shadow: 0 0 7px rgba(216, 134, 45, 0.34);
+}
+
+.device-port.recovering .device-port-state,
+.device-port.switching .device-port-state {
+  color: rgba(65, 111, 156, 0.76);
+}
+
+.device-port.recovering .device-port-state i,
+.device-port.switching .device-port-state i {
+  background: #5b8dc0;
+  box-shadow: 0 0 7px rgba(91, 141, 192, 0.34);
+}
+
+.device-port.ready strong,
+.device-port.ready small,
+.device-port.switching strong,
+.device-port.switching small {
+  color: rgba(43, 41, 37, 0.42);
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.32);
+}
+
+.device-port.off strong,
+.device-port.off small,
+.device-port.fault strong,
+.device-port.fault small {
+  color: rgba(43, 41, 37, 0.28);
+  text-shadow: none;
+}
+
+.device-port.off .device-port-state {
+  color: rgba(118, 107, 95, 0.48);
+  text-shadow: none;
+}
+
+.device-port.fault .device-port-state {
+  color: rgba(165, 72, 62, 0.70);
+  text-shadow: none;
+}
+
+.device-port.fault .device-port-state i {
+  background: #a5483e;
+  box-shadow: 0 0 7px rgba(165, 72, 62, 0.28);
 }
 
 .side-port-face {
@@ -1320,21 +1530,6 @@ h1 {
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(245, 241, 232, 0.94)),
     var(--paper-strong);
-}
-
-.port-card.side-card {
-  border-color: rgba(244, 123, 32, 0.42);
-}
-
-.port-card.side-card::after {
-  position: absolute;
-  top: 14px;
-  right: 14px;
-  width: 6px;
-  height: 42px;
-  border-radius: 99px;
-  background: linear-gradient(180deg, rgba(244, 123, 32, 0.8), rgba(244, 123, 32, 0.16));
-  content: "";
 }
 
 .summary-strip {
@@ -1703,7 +1898,7 @@ h1 {
 
 .trend-stats {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
   gap: 12px;
   border-top: 1px solid rgba(40, 35, 31, 0.1);
   padding-top: 12px;
@@ -1711,14 +1906,6 @@ h1 {
   font-family: "SF Mono", "Cascadia Code", monospace;
   font-size: 13px;
   font-weight: 900;
-}
-
-.trend-stats span:nth-child(2) {
-  text-align: center;
-}
-
-.trend-stats span:nth-child(3) {
-  text-align: right;
 }
 
 .port-detail-lists {
@@ -1807,6 +1994,38 @@ h1 {
   font-size: 12px;
 }
 
+.port-state-guide {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin: -4px 0 14px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.port-state-guide p {
+  margin: 0;
+  white-space: nowrap;
+  font-weight: 800;
+}
+
+.port-state-guide div {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.port-state-guide span {
+  display: inline-flex;
+}
+
+.port-state-guide .state-dot {
+  cursor: help;
+  font-style: normal;
+}
+
 .ports-grid {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -1818,6 +2037,18 @@ h1 {
   position: relative;
   overflow: hidden;
   padding: 16px;
+  transition:
+    border-color 260ms ease,
+    box-shadow 320ms ease,
+    transform 260ms ease;
+}
+
+.port-card.peak-port {
+  border-color: rgba(244, 123, 32, 0.58);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.8) inset,
+    0 0 0 1px rgba(244, 123, 32, 0.12),
+    0 12px 34px rgba(244, 123, 32, 0.12);
 }
 
 .port-card::before {
@@ -1827,10 +2058,48 @@ h1 {
   opacity: 0.12;
   background: linear-gradient(135deg, var(--amber), transparent 42%);
   pointer-events: none;
+  transition:
+    opacity 260ms ease,
+    background 260ms ease;
+}
+
+.port-card::after {
+  position: absolute;
+  inset: -24px;
+  content: "";
+  opacity: 0;
+  background:
+    radial-gradient(circle at 20% 16%, rgba(255, 157, 46, 0.28), transparent 34%),
+    radial-gradient(circle at 82% 10%, rgba(244, 123, 32, 0.16), transparent 28%);
+  filter: blur(1px);
+  pointer-events: none;
+  transform: scale(0.96);
+  transition:
+    opacity 360ms ease,
+    transform 360ms ease;
+}
+
+.port-card.peak-port::before {
+  opacity: 0.22;
+  background:
+    radial-gradient(circle at 18% 18%, rgba(255, 157, 46, 0.34), transparent 36%),
+    linear-gradient(135deg, rgba(244, 123, 32, 0.42), transparent 48%);
+}
+
+.port-card.peak-port::after {
+  opacity: 1;
+  transform: scale(1);
+  animation: peakPortBreath 2.2s ease-in-out infinite;
 }
 
 .port-card.hot::before {
   background: linear-gradient(135deg, #d13d16, transparent 42%);
+}
+
+.port-card.hot.peak-port::before {
+  background:
+    radial-gradient(circle at 18% 18%, rgba(255, 157, 46, 0.34), transparent 36%),
+    linear-gradient(135deg, rgba(244, 123, 32, 0.42), transparent 48%);
 }
 
 .port-card-top,
@@ -1851,12 +2120,103 @@ h1 {
 }
 
 .state-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border-radius: 99px;
   background: #ecf4ef;
   padding: 4px 8px;
   color: var(--green);
   font-size: 12px;
+  font-style: normal;
   font-weight: 800;
+}
+
+.port-ready .state-dot {
+  background: rgba(201, 205, 208, 0.32);
+  color: #6f746f;
+}
+
+.state-dot.port-ready {
+  background: rgba(201, 205, 208, 0.32);
+  color: #6f746f;
+}
+
+.port-no-power .state-dot {
+  background: rgba(255, 157, 46, 0.12);
+  color: #9a5a22;
+}
+
+.state-dot.port-no-power {
+  background: rgba(255, 157, 46, 0.12);
+  color: #9a5a22;
+}
+
+.port-switching .state-dot,
+.port-recovering .state-dot {
+  background: rgba(91, 141, 192, 0.13);
+  color: #416f9c;
+}
+
+.state-dot.port-switching,
+.state-dot.port-recovering {
+  background: rgba(91, 141, 192, 0.13);
+  color: #416f9c;
+}
+
+.port-protecting .state-dot {
+  background: rgba(255, 157, 46, 0.16);
+  color: #9a5a22;
+}
+
+.state-dot.port-protecting {
+  background: rgba(255, 157, 46, 0.16);
+  color: #9a5a22;
+}
+
+.port-fault .state-dot {
+  background: rgba(192, 72, 60, 0.12);
+  color: #a5483e;
+}
+
+.state-dot.port-fault {
+  background: rgba(192, 72, 60, 0.12);
+  color: #a5483e;
+}
+
+.port-off .state-dot {
+  background: rgba(40, 35, 31, 0.08);
+  color: rgba(118, 107, 95, 0.72);
+}
+
+.state-dot.port-off {
+  background: rgba(40, 35, 31, 0.08);
+  color: rgba(118, 107, 95, 0.72);
+}
+
+.state-dot.port-attached {
+  background: #ecf4ef;
+  color: var(--green);
+}
+
+.port-off .power-number,
+.port-off .port-grid,
+.port-off .budget-row,
+.port-fault .power-number,
+.port-fault .port-grid,
+.port-fault .budget-row {
+  opacity: 0.54;
+}
+
+.port-no-power .power-number,
+.port-no-power .port-grid,
+.port-switching .power-number,
+.port-switching .port-grid,
+.port-protecting .power-number,
+.port-protecting .port-grid,
+.port-recovering .power-number,
+.port-recovering .port-grid {
+  opacity: 0.72;
 }
 
 .power-number {
@@ -2083,6 +2443,43 @@ h1 {
   font-weight: 900;
 }
 
+.history-tooltip {
+  display: grid;
+  gap: 7px;
+  border: 1px solid var(--chart-tooltip-border);
+  border-radius: 8px;
+  background: var(--chart-tooltip-bg);
+  padding: 10px 12px;
+  color: var(--chart-tooltip-ink);
+  box-shadow: 0 10px 22px rgba(68, 52, 38, 0.12);
+}
+
+.history-tooltip strong,
+.history-tooltip span {
+  font-family: "SF Mono", "Cascadia Code", monospace;
+}
+
+.history-tooltip strong {
+  font-size: 13px;
+}
+
+.history-tooltip span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.history-tooltip-states {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.history-tooltip .state-dot {
+  width: fit-content;
+  font-size: 11px;
+}
+
 .history-stats span {
   border: 1px solid rgba(40, 35, 31, 0.08);
   border-radius: 8px;
@@ -2151,9 +2548,22 @@ h1 {
   }
 }
 
+@keyframes peakPortBreath {
+  0%,
+  100% {
+    transform: scale(0.98);
+  }
+  50% {
+    transform: scale(1.03);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .history-loading-overlay span,
-  .history-loading-skeleton i {
+  .history-loading-skeleton i,
+  .device-port.attached::before,
+  .device-port.no-power::before,
+  .port-card.peak-port::after {
     animation: none;
   }
 }
@@ -2277,6 +2687,15 @@ h1 {
 
   .runtime-panel {
     grid-template-columns: 1fr;
+  }
+
+  .port-state-guide {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .port-state-guide div {
+    justify-content: flex-start;
   }
 
   .diagnostics-grid,
