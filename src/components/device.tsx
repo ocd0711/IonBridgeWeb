@@ -9,6 +9,24 @@ function samplePower(sample: { voltage: number; current: number }) {
   return (sample.voltage * sample.current) / 1_000_000;
 }
 
+function peakTotalPower(history: PortHistory) {
+  const totalsByTime = new Map<number, number>();
+  const totalsByIndex = new Map<number, number>();
+  for (const port of history.ports) {
+    port.samples.forEach((sample, index) => {
+      const power = samplePower(sample);
+      if (Number.isFinite(sample.ts)) {
+        const second = Math.round((sample.ts as number) / 1000);
+        totalsByTime.set(second, (totalsByTime.get(second) ?? 0) + power);
+      } else {
+        totalsByIndex.set(index, (totalsByIndex.get(index) ?? 0) + power);
+      }
+    });
+  }
+
+  return Math.max(0, ...totalsByTime.values(), ...totalsByIndex.values());
+}
+
 function AmberScreen({
   metrics,
   history,
@@ -20,10 +38,7 @@ function AmberScreen({
 }) {
   const { t } = useI18n();
   const totalPower = metrics.ports.reduce((sum, port) => sum + watts(port), 0);
-  const peakPower = Math.max(
-    totalPower,
-    ...history.ports.flatMap((port) => port.samples.map(samplePower)),
-  );
+  const peakPower = Math.max(totalPower, peakTotalPower(history));
   const percent = Math.max(0, Math.min(99, (totalPower / profile.totalPowerBudgetW) * 100));
 
   return (
