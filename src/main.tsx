@@ -143,51 +143,55 @@ function Header({
   return (
     <>
       <header className="app-header">
-        <div>
+        <div className="product-identity">
           <p className="eyebrow">{productEyebrow}</p>
           <h1>{productTitle}</h1>
           <p className="subhead">
             {profile.displayKind === "amber" ? t("amberSubhead") : t("ledSubhead")}
           </p>
         </div>
-        <div className="header-metrics" aria-label={t("realtimeSummary")}>
-          <div className="metric-pill">
-            <Zap size={17} />
-            <span>{totalPower.toFixed(1)}W</span>
+        <div className="header-stack">
+          <div className="header-status" aria-label={t("realtimeSummary")}>
+            <div className={`live-chip ${source}`}>
+              <span />
+              {targetStatusLabel(language, deviceStatus)} · {sourceLabel(language, source)}
+              <small>{transportLabel(language, transportState)}</small>
+              {updatedAt ? ` ${updatedAt.toLocaleTimeString("zh-CN", { hour12: false })}` : ""}
+            </div>
+            <SavedTargetsMenu
+              activeTargetUrl={targetUrl}
+              disabled={connectionActionPending}
+              targets={savedTargets}
+              onSelect={onSelectSavedTarget}
+              onDelete={onDeleteTarget}
+              onUpdateNote={onUpdateTargetNote}
+            />
+            <LanguageToggle />
+            <button
+              aria-expanded={settingsOpen}
+              aria-label={t("deviceSettings")}
+              className={`header-action ${settingsOpen ? "active" : ""}`}
+              onClick={() => setSettingsOpen((open) => !open)}
+              title={t("deviceSettings")}
+              type="button"
+            >
+              <Settings size={17} />
+            </button>
           </div>
-          <div className={`metric-pill temp-${temperatureLevel(hottest)}`}>
-            <Gauge size={17} />
-            <span>{formatTemperature(hottest)}</span>
+          <div className="header-metrics">
+            <div className="metric-pill">
+              <Zap size={17} />
+              <span>{totalPower.toFixed(1)}W</span>
+            </div>
+            <div className={`metric-pill temp-${temperatureLevel(hottest)}`}>
+              <Gauge size={17} />
+              <span>{formatTemperature(hottest)}</span>
+            </div>
+            <div className="metric-pill">
+              <Radio size={17} />
+              <span>{metrics.wifi.rssi}dBm</span>
+            </div>
           </div>
-          <div className="metric-pill">
-            <Radio size={17} />
-            <span>{metrics.wifi.rssi}dBm</span>
-          </div>
-          <div className={`live-chip ${source}`}>
-            <span />
-            {targetStatusLabel(language, deviceStatus)} · {sourceLabel(language, source)}
-            <small>{transportLabel(language, transportState)}</small>
-            {updatedAt ? ` ${updatedAt.toLocaleTimeString("zh-CN", { hour12: false })}` : ""}
-          </div>
-          <SavedTargetsMenu
-            activeTargetUrl={targetUrl}
-            disabled={connectionActionPending}
-            targets={savedTargets}
-            onSelect={onSelectSavedTarget}
-            onDelete={onDeleteTarget}
-            onUpdateNote={onUpdateTargetNote}
-          />
-          <LanguageToggle />
-          <button
-            aria-expanded={settingsOpen}
-            aria-label={t("deviceSettings")}
-            className={`header-action ${settingsOpen ? "active" : ""}`}
-            onClick={() => setSettingsOpen((open) => !open)}
-            title={t("deviceSettings")}
-            type="button"
-          >
-            <Settings size={17} />
-          </button>
         </div>
       </header>
       {settingsOpen ? (
@@ -678,7 +682,7 @@ function SystemPanel({ metrics, heap }: { metrics: Metrics; heap: HeapMetrics })
         </div>
         <div>
           <dt>Reset</dt>
-          <dd>{formatResetReason(metrics.system.reset_reason, language)}</dd>
+          <dd className="reset-reason">{formatResetReason(metrics.system.reset_reason, language)}</dd>
         </div>
         <div>
           <dt>Wi-Fi</dt>

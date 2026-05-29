@@ -408,6 +408,8 @@ export function PowerChart({
   const { t } = useI18n();
   const portKeys = ["A", "C1", "C2", "C3", "C4"];
   const portColors = ["#2b2926", "#f47b20", "#d9571c", "#917a54", "#6d9483"];
+  const chartLegend = portKeys.map((key, index) => ({ key, color: portColors[index], dashed: false }))
+    .concat({ key: "Temp", color: "#7f6d52", dashed: true });
   const basePort = history.ports.reduce(
     (longest, port) => (port.samples.length > longest.samples.length ? port : longest),
     history.ports[0],
@@ -451,6 +453,17 @@ export function PowerChart({
       </div>
       {canShowTrend ? (
         <>
+          <div className="chart-legend" aria-label={t("chartLegend")}>
+            {chartLegend.map((item) => (
+              <span key={item.key}>
+                <i
+                  className={item.dashed ? "dashed" : ""}
+                  style={{ "--legend-color": item.color } as React.CSSProperties}
+                />
+                {item.key}
+              </span>
+            ))}
+          </div>
           <div className="live-chart-shell">
             <ResponsiveContainer width="100%" height={300}>
               <ComposedChart data={rows} margin={{ top: 12, right: 12, left: -18, bottom: 0 }}>

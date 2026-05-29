@@ -197,13 +197,13 @@ input {
 
 .app-header {
   display: flex;
-  align-items: flex-end;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 24px;
   padding: 10px 0 28px;
 }
 
-.app-header > div:first-child {
+.product-identity {
   flex: 1 1 520px;
   min-width: 480px;
 }
@@ -236,11 +236,23 @@ h1 {
   font-size: 16px;
 }
 
+.header-stack {
+  display: grid;
+  min-width: min(100%, 640px);
+  justify-items: end;
+  gap: 10px;
+}
+
+.header-status,
 .header-metrics {
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 10px;
+}
+
+.header-status {
+  width: 100%;
 }
 
 .metric-pill,
@@ -443,7 +455,7 @@ h1 {
 
 .saved-targets {
   position: relative;
-  min-width: min(100%, 320px);
+  min-width: min(100%, 300px);
 }
 
 .saved-target-trigger {
@@ -1916,6 +1928,42 @@ h1 {
   align-content: center;
 }
 
+.chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin: -4px 0 8px;
+}
+
+.chart-legend span {
+  display: inline-flex;
+  min-height: 24px;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid rgba(40, 35, 31, 0.08);
+  border-radius: 999px;
+  background: rgba(255, 253, 250, 0.58);
+  padding: 0 8px;
+  color: var(--muted);
+  font-family: "SF Mono", "Cascadia Code", monospace;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.chart-legend i {
+  width: 18px;
+  height: 2px;
+  border-radius: 99px;
+  background: var(--legend-color);
+}
+
+.chart-legend i.dashed {
+  height: 0;
+  border-top: 2px dashed var(--legend-color);
+  background: transparent;
+}
+
 .long-history-panel {
   display: grid;
   gap: 16px;
@@ -2152,6 +2200,16 @@ h1 {
   text-align: right;
 }
 
+.system-panel .reset-reason {
+  max-width: min(100%, 360px);
+  white-space: normal;
+}
+
+.system-panel .reset-reason::first-line {
+  color: var(--ink);
+  font-weight: 900;
+}
+
 .task-list {
   display: grid;
   gap: 8px;
@@ -2197,10 +2255,18 @@ h1 {
     flex-direction: column;
   }
 
-  .app-header > div:first-child {
+  .product-identity {
+    flex: none;
     min-width: 0;
   }
 
+  .header-stack {
+    width: 100%;
+    min-width: 0;
+    justify-items: start;
+  }
+
+  .header-status,
   .header-metrics {
     justify-content: flex-start;
   }
@@ -2282,6 +2348,14 @@ h1 {
 
   .saved-targets {
     width: 100%;
+  }
+
+  .header-status {
+    width: 100%;
+  }
+
+  .header-status .saved-targets {
+    order: 3;
   }
 
   .saved-target-menu {
@@ -2462,6 +2536,7 @@ h1 {
   .target-setup-card .target-control,
   .login-card input,
   .saved-target,
+  .chart-legend span,
   .port-history-grid button,
   .port-detail-panel,
   .history-stats span,
