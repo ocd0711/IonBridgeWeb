@@ -19,6 +19,8 @@ const MACHINE_INFO_STORAGE_PREFIX = "ionbridge:machine-info:v1:";
 const REQUEST_TIMEOUT_MS = 3500;
 const METRICS_TIMEOUT_MS = 8000;
 const MACHINE_INFO_TIMEOUT_MS = 8000;
+const TEMPERATURE_BACKFILL_MAX_AGE_MS = 2 * 60 * 1000;
+const mqttActiveUntilByDevice = new Map<string, number>();
 
 export class AuthRequiredError extends Error {
   constructor() {
@@ -52,8 +54,26 @@ export type ServerSession = {
     targetUrl: string;
     refreshIntervalMs: number;
     showAppearanceSwitcher?: boolean;
+    mqtt?: MqttConfig;
     targets: SavedTarget[];
   };
+};
+
+export type MqttConfig = {
+  enabled: boolean;
+  brokerUrl: string;
+  username: string;
+  configured: boolean;
+  hasPassword: boolean;
+};
+
+export type MqttStatus = {
+  enabled: boolean;
+  configured: boolean;
+  brokerUrl: string;
+  connected: boolean;
+  lastError: string | null;
+  lastMessageAt: number | null;
 };
 
 export type SavedTarget = {
@@ -83,6 +103,7 @@ export type ServerHistoryRow = {
 
 export type LiveDashboardSnapshot = {
   type: "snapshot";
+  source?: "http" | "mqtt";
   deviceKey: string;
   targetUrl: string;
   ts: number;
@@ -134,6 +155,151 @@ export async function saveServerConfig(config: { targetUrl: string; refreshInter
     throw new Error(await responseErrorMessage(response, "连接失败或设备未提供 PSN，未保存"));
   }
   return response.json() as Promise<ServerSession["config"]>;
+}
+
+export async function saveMqttConfig(config: { enabled: boolean; brokerUrl: string; username: string; password?: string }) {
+  const response = await fetch("/api/mqtt", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(config),
+  });
+  if (!response.ok) {
+    throwIfUnauthorized(response);
+    throw new Error(await responseErrorMessage(response, "MQTT 配置保存失败"));
+  }
+  return response.json() as Promise<{ config: ServerSession["config"]; mqtt: { config: MqttConfig; status: MqttStatus } }>;
+}
+
+export async function fetchMqttStatus() {
+  const response = await fetch("/api/mqtt", { cache: "no-store" });
+  if (!response.ok) {
+    throwIfUnauthorized(response);
+    throw new Error(await responseErrorMessage(response, "MQTT 状态读取失败"));
+  }
+  return response.json() as Promise<{ config: MqttConfig; status: MqttStatus }>;
+}
+
+export async function setMqttTelemetryStream(deviceKey: string, enabled: boolean) {
+  const response = await fetch("/api/mqtt/stream", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ deviceKey, enabled }),
+  });
+  if (!response.ok) {
+    throwIfUnauthorized(response);
+    throw new Error(await responseErrorMessage(response, "MQTT 遥测流控制失败"));
+  }
+}
+
+export async function setMqttPortPower(deviceKey: string, port: number, enabled: boolean) {
+  const response = await fetch("/api/mqtt/ports", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ deviceKey, port, enabled }),
+  });
+  if (!response.ok) {
+    throwIfUnauthorized(response);
+    throw new Error(await responseErrorMessage(response, "MQTT 端口控制失败"));
+  }
+}
+
+export type MqttControlAction =
+  | "devicePower"
+  | "rebootDevice"
+  | "telemetryStream"
+  | "portPower"
+  | "chargingStrategy"
+  | "temperatureMode"
+  | "temporaryAllocation"
+  | "portCompatibility"
+  | "portConfig"
+  | "portType"
+  | "customPdoVoltage"
+  | "cableCompensation"
+  | "displayIntensity"
+  | "displayMode"
+  | "displaySetup";
+
+export type MqttControlState = {
+  chargingStrategy?: number;
+  compatibility?: {
+    enableTfcp: boolean;
+    enableFcp: boolean;
+    enableUfcs: boolean;
+    enableHvScp: boolean;
+    enableLvScp: boolean;
+  };
+  portConfigs?: MqttPortConfig[];
+  displayIntensity?: number;
+  displayMode?: number;
+  displayRotation?: number;
+  idleAnimation?: number;
+  cableCompensation?: Record<string, {
+    enable: boolean;
+    resistance: number;
+    voltageOffset: number;
+  }>;
+};
+
+export type MqttPowerFeatures = {
+  enableTfcp: boolean;
+  enablePe: boolean;
+  enableQc2p0: boolean;
+  enableQc3p0: boolean;
+  enableQc3plus: boolean;
+  enableAfc: boolean;
+  enableFcp: boolean;
+  enableHvScp: boolean;
+  enableLvScp: boolean;
+  enableSfcp: boolean;
+  enableApple: boolean;
+  enableSamsung: boolean;
+  enableUfcs: boolean;
+  enablePd: boolean;
+  enablePdCompatMode: boolean;
+  limitedCurrentMode: boolean;
+  enablePdLvpps: boolean;
+  enablePdEpr: boolean;
+  enablePdRpi: boolean;
+  enablePdHvpps: boolean;
+  enablePdHardResetOnRefusal: boolean;
+  enablePdSprAvs: boolean;
+};
+
+export type MqttPortConfig = {
+  version: number;
+  features: MqttPowerFeatures;
+};
+
+export type MqttControlStateResult = {
+  state: MqttControlState;
+  errors: Record<string, string>;
+};
+
+export async function sendMqttControl(deviceKey: string, action: MqttControlAction, params: Record<string, unknown> = {}) {
+  const response = await fetch("/api/mqtt/control", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ deviceKey, action, params }),
+  });
+  if (!response.ok) {
+    throwIfUnauthorized(response);
+    throw new Error(await responseErrorMessage(response, "MQTT 控制命令发送失败"));
+  }
+  return response.json() as Promise<{ ok: true }>;
+}
+
+export async function fetchMqttControlState(deviceKey: string, ports: number[]) {
+  const response = await fetch("/api/mqtt/state", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ deviceKey, ports }),
+  });
+  if (!response.ok) {
+    throwIfUnauthorized(response);
+    throw new Error(await responseErrorMessage(response, "MQTT 控制状态读取失败"));
+  }
+  return response.json() as Promise<{ ok: true } & MqttControlStateResult>;
 }
 
 export async function deleteSavedTarget(targetUrl: string) {
@@ -325,7 +491,7 @@ export async function fetchDashboardData(targetUrl = DEFAULT_DEVICE_TARGET, devi
     const mergedHistory = serverRows.length > 0
       ? mergeHistory(historyFromServerRows(serverRows), metrics, normalizedTarget)
       : mergedDeviceHistory;
-    return { metrics, history: mergedHistory, heap, machineInfo, source: "device" };
+    return { metrics: mergePortTemperatures(metrics, mergedHistory), history: mergedHistory, heap, machineInfo, source: "device" };
   } catch (error) {
     if (isAuthRequiredError(error)) throw error;
     return fetchOfflineDashboardData(normalizedTarget, deviceKey);
@@ -375,15 +541,88 @@ export function mergeLiveDashboardData(
   current: Awaited<ReturnType<typeof fetchDashboardData>> | null,
   snapshot: LiveDashboardSnapshot,
 ): Awaited<ReturnType<typeof fetchDashboardData>> {
-  writeCachedMachineInfo(snapshot.targetUrl, snapshot.machineInfo);
-  const baseHistory = current?.history ?? liveOnlyHistory(snapshot.metrics);
+  const mqttActive = isMqttActiveForSnapshot(snapshot);
+  const keepMqttPorts = snapshot.source === "http" && mqttActive && current;
+  const portMetrics = keepMqttPorts
+    ? { ...current.metrics, ports: mergeMissingPortMetrics(current.metrics.ports, snapshot.metrics.ports) }
+    : snapshot.metrics;
+  const machineInfo = mergeMachineInfo(current?.machineInfo, snapshot.machineInfo);
+  writeCachedMachineInfo(snapshot.targetUrl, machineInfo);
+  const baseHistory = current?.history ?? liveOnlyHistory(portMetrics);
   return {
-    metrics: snapshot.metrics,
-    history: mergeHistory(baseHistory, snapshot.metrics, snapshot.targetUrl, snapshot.ts),
+    metrics: mergeLiveMetrics(current?.metrics, snapshot.metrics, portMetrics.ports),
+    history: keepMqttPorts ? baseHistory : mergeHistory(baseHistory, portMetrics, snapshot.targetUrl, snapshot.ts),
     heap: snapshot.heap ?? current?.heap ?? mockHeap,
-    machineInfo: snapshot.machineInfo,
+    machineInfo,
     source: "device",
   };
+}
+
+function isMqttActiveForSnapshot(snapshot: LiveDashboardSnapshot) {
+  const activeWindow = mqttActiveWindowMs(snapshot);
+  if (snapshot.source === "mqtt" && snapshot.metrics.ports.length > 0) {
+    mqttActiveUntilByDevice.set(snapshot.deviceKey, snapshot.ts + activeWindow);
+    return true;
+  }
+  return Date.now() < (mqttActiveUntilByDevice.get(snapshot.deviceKey) ?? 0);
+}
+
+function mqttActiveWindowMs(snapshot: LiveDashboardSnapshot) {
+  const target = snapshot.config?.targets.find((item) => item.deviceKey === snapshot.deviceKey);
+  const interval = target?.refreshIntervalMs ?? snapshot.config?.refreshIntervalMs ?? 0;
+  return Math.max(5000, (interval || 30000) * 2);
+}
+
+function mergeMissingPortMetrics(primary: Metrics["ports"], fallback: Metrics["ports"]): Metrics["ports"] {
+  const fallbackByPort = new Map(fallback.map((port) => [port.id, port]));
+  return primary.map((port) => {
+    const supplement = fallbackByPort.get(port.id);
+    if (!supplement) return port;
+    return {
+      ...supplement,
+      ...port,
+      die_temperature: validTemperature(port.die_temperature) ?? validTemperature(supplement.die_temperature) ?? undefined,
+      pd_status: port.pd_status ?? supplement.pd_status,
+      power_budget: port.power_budget || supplement.power_budget,
+      charging_duration_seconds: port.charging_duration_seconds || supplement.charging_duration_seconds,
+      vin_value: port.vin_value || supplement.vin_value,
+    };
+  });
+}
+
+function mergeLiveMetrics(current: Metrics | undefined, snapshot: Metrics, ports: Metrics["ports"]): Metrics {
+  if (!current) return snapshot;
+  return {
+    ports: ports.length > 0 ? ports : current.ports,
+    system: {
+      ...current.system,
+      ...nonEmptyObject(snapshot.system),
+    },
+    tasks: snapshot.tasks.length > 0 ? snapshot.tasks : current.tasks,
+    wifi: {
+      ...current.wifi,
+      ...nonEmptyObject(snapshot.wifi),
+    },
+  };
+}
+
+function mergeMachineInfo(current: MachineInfo | undefined, snapshot: MachineInfo): MachineInfo {
+  if (!current) return snapshot;
+  return {
+    ...current,
+    ...nonEmptyObject(snapshot),
+  };
+}
+
+function nonEmptyObject<T extends Record<string, unknown>>(value: T): Partial<T> {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, entry]) => {
+      if (entry == null) return false;
+      if (typeof entry === "string") return entry.trim() !== "" && entry !== "unknown";
+      if (typeof entry === "number") return Number.isFinite(entry) && entry !== 0;
+      return true;
+    }),
+  ) as Partial<T>;
 }
 
 function offlineMetricsFromHistory(rows: ServerHistoryRow[]): Metrics {
@@ -436,7 +675,7 @@ function historyFromServerRows(rows: ServerHistoryRow[]): PortHistory {
     sample_period_ms: 30000,
     ports: Array.from(byPort.entries()).map(([port, samples]) => ({
       port,
-      samples: samples.sort((a, b) => a.ts - b.ts).slice(-360),
+      samples: samples.sort((a, b) => a.ts - b.ts),
     })),
   };
 }
@@ -544,6 +783,30 @@ function mergeHistory(seed: PortHistory, metrics: Metrics, targetUrl: string, no
   };
   writeStoredHistory(targetUrl, merged);
   return merged;
+}
+
+function mergePortTemperatures(metrics: Metrics, history: PortHistory, now = Date.now()): Metrics {
+  const latestTemperatures = new Map<number, { temperature: number; ts: number }>();
+  for (const port of history.ports) {
+    for (const sample of port.samples) {
+      const temperature = validTemperature(sample.temperature_c);
+      const ts = sample.ts;
+      if (temperature == null || typeof ts !== "number" || !Number.isFinite(ts)) continue;
+      const current = latestTemperatures.get(port.port);
+      if (!current || ts > current.ts) {
+        latestTemperatures.set(port.port, { temperature, ts });
+      }
+    }
+  }
+  return {
+    ...metrics,
+    ports: metrics.ports.map((port) => {
+      if (validTemperature(port.die_temperature) != null) return port;
+      const latest = latestTemperatures.get(port.id);
+      if (!latest || now - latest.ts > TEMPERATURE_BACKFILL_MAX_AGE_MS) return port;
+      return { ...port, die_temperature: latest.temperature };
+    }),
+  };
 }
 
 function mergeSamples(

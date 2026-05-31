@@ -1,9 +1,25 @@
 services:
+  emqx:
+    image: emqx/emqx:latest
+    container_name: ionbridge-emqx
+    restart: unless-stopped
+    ports:
+      - "1883:1883"
+      - "18083:18083"
+    environment:
+      EMQX_NODE__NAME: "emqx@ionbridge-emqx"
+      EMQX_DASHBOARD__DEFAULT_PASSWORD: "change-me"
+    volumes:
+      - emqx-data:/opt/emqx/data
+      - emqx-log:/opt/emqx/log
+
   ionbridge-web:
     image: ghcr.io/ocd0711/ionbridge-web:latest
     build: .
     container_name: ionbridge-web
     restart: unless-stopped
+    depends_on:
+      - emqx
     ports:
       - "18318:18318"
     environment:
@@ -12,10 +28,11 @@ services:
       IONBRIDGE_ALLOW_TARGET_REDIRECTS: "false"
       IONBRIDGE_MAX_TARGET_REDIRECTS: "0"
       IONBRIDGE_SHOW_APPEARANCE_SWITCHER: "false"
-      # 设置后启用登录保护。
-      # IONBRIDGE_PASSWORD: "change-me"
+      IONBRIDGE_PASSWORD: "${IONBRIDGE_PASSWORD:-}"
     volumes:
       - ionbridge-data:/data
 
 volumes:
   ionbridge-data:
+  emqx-data:
+  emqx-log:

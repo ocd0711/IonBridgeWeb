@@ -14,6 +14,7 @@ ENV IONBRIDGE_DATA_DIR=/data
 COPY --from=build --chown=node:node /app/dist ./dist
 COPY --from=build --chown=node:node /app/server ./server
 COPY --chown=node:node package*.json ./
+RUN npm ci --omit=dev
 RUN mkdir -p /data && chown -R node:node /app /data
 VOLUME ["/data"]
 EXPOSE 18318

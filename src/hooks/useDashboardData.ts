@@ -12,11 +12,12 @@ import {
 } from "../api";
 
 export type DashboardData = Awaited<ReturnType<typeof fetchDashboardData>>;
-export type LiveTransportState = "connecting" | "sse" | "reconnecting" | "fallback";
+export type LiveTransportState = "connecting" | "mqtt" | "mqtt-http" | "http" | "reconnecting" | "fallback";
+export type FrontendTransportState = "connecting" | "sse" | "reconnecting" | "http";
 export type DeviceStatus = LiveStatusEvent["status"];
 
-export function shouldHoldOfflineStatus(lastSnapshotAt: number, now: number, refreshIntervalMs: number) {
-  return Boolean(lastSnapshotAt) && now - lastSnapshotAt < refreshIntervalMs * 2.5;
+export function isMqttHeartbeatFresh(lastMqttPortSnapshotAt: number, now: number, refreshIntervalMs: number) {
+  return Boolean(lastMqttPortSnapshotAt) && now - lastMqttPortSnapshotAt < Math.max(5000, refreshIntervalMs * 2);
 }
 
 export function useDashboardData(
@@ -31,17 +32,20 @@ export function useDashboardData(
   const [updatedAt, setUpdatedAt] = React.useState<Date | null>(null);
   const [refreshToken, setRefreshToken] = React.useState(0);
   const [transportState, setTransportState] = React.useState<LiveTransportState>("connecting");
+  const [frontendTransportState, setFrontendTransportState] = React.useState<FrontendTransportState>("connecting");
   const [deviceStatus, setDeviceStatus] = React.useState<DeviceStatus>("unknown");
 
   React.useEffect(() => {
     let alive = true;
     let lastSnapshotAt = 0;
+    let lastMqttPortSnapshotAt = 0;
     let refreshInFlight = false;
     let eventSource: EventSource | null = null;
     let initialTimer = 0;
     setData(null);
     setUpdatedAt(null);
     setTransportState("connecting");
+    setFrontendTransportState("connecting");
     setDeviceStatus("unknown");
     if (!enabled || !targetUrl.trim()) return;
 
@@ -52,10 +56,26 @@ export function useDashboardData(
       try {
         const next = offlineOnly ? await fetchOfflineDashboardData(targetUrl, deviceKey) : await fetchDashboardData(targetUrl, deviceKey);
         if (!alive || lastSnapshotAt > startedAt) return;
-        setData(next);
+        setFrontendTransportState("http");
+        if (next.source === "device") {
+          const ts = Date.now();
+          setData((current) => mergeLiveDashboardData(current, {
+            type: "snapshot",
+            source: "http",
+            deviceKey: deviceKey || next.machineInfo.psn || "",
+            targetUrl,
+            ts,
+            metrics: next.metrics,
+            heap: next.heap,
+            machineInfo: next.machineInfo,
+          }));
+          setTransportState(isMqttHeartbeatFresh(lastMqttPortSnapshotAt, ts, refreshIntervalMs) ? "mqtt-http" : "http");
+        } else {
+          setData(next);
+          setTransportState("fallback");
+        }
         setUpdatedAt(new Date());
         setDeviceStatus(next.source === "device" ? "online" : next.source === "offline" ? "offline" : "unknown");
-        if (offlineOnly || !lastSnapshotAt || next.source !== "device") setTransportState("fallback");
       } catch (error) {
         if (isAuthRequiredError(error)) {
           onAuthRequired?.();
@@ -71,29 +91,52 @@ export function useDashboardData(
       eventSource.onopen = () => {
         if (!alive) return;
         setTransportState((current) => current === "fallback" ? current : "connecting");
+        setFrontendTransportState("connecting");
       };
       eventSource.onerror = () => {
         if (!alive) return;
         setTransportState((current) => current === "fallback" ? current : "reconnecting");
+        setFrontendTransportState("reconnecting");
         void refresh();
       };
       eventSource.addEventListener("snapshot", (event) => {
         if (!alive) return;
-        lastSnapshotAt = Date.now();
-        setTransportState("sse");
-        setDeviceStatus("online");
+        const receivedAt = Date.now();
+        lastSnapshotAt = receivedAt;
+        setFrontendTransportState("sse");
         const snapshot = JSON.parse((event as MessageEvent).data) as LiveDashboardSnapshot;
+        if (snapshot.source === "mqtt" && snapshot.metrics.ports.length > 0) {
+          lastMqttPortSnapshotAt = receivedAt;
+          setTransportState("mqtt");
+        } else if (snapshot.source === "mqtt") {
+          setTransportState((current) => (
+            isMqttHeartbeatFresh(lastMqttPortSnapshotAt, receivedAt, refreshIntervalMs)
+              ? "mqtt"
+              : current
+          ));
+        } else if (snapshot.source === "http") {
+          setTransportState(isMqttHeartbeatFresh(lastMqttPortSnapshotAt, receivedAt, refreshIntervalMs) ? "mqtt-http" : "http");
+        } else {
+          setTransportState("http");
+        }
+        setDeviceStatus("online");
         setData((current) => mergeLiveDashboardData(current, snapshot));
         setUpdatedAt(new Date(snapshot.ts));
         if (snapshot.config) onConfigUpdate?.(snapshot.config);
       });
       eventSource.addEventListener("status", (event) => {
         if (!alive) return;
+        setFrontendTransportState("sse");
         const status = JSON.parse((event as MessageEvent).data) as LiveStatusEvent;
-        setTransportState((current) => lastSnapshotAt ? "sse" : current);
         if (status.config) onConfigUpdate?.(status.config);
         if (status.status === "offline") {
-          if (!shouldHoldOfflineStatus(lastSnapshotAt, Date.now(), refreshIntervalMs)) {
+          const mqttFresh = isMqttHeartbeatFresh(lastMqttPortSnapshotAt, Date.now(), refreshIntervalMs);
+          if (mqttFresh) {
+            setDeviceStatus("online");
+            setTransportState("mqtt");
+            return;
+          }
+          if (!isMqttHeartbeatFresh(lastMqttPortSnapshotAt, Date.now(), refreshIntervalMs)) {
             setDeviceStatus("offline");
           }
           void refresh();
@@ -107,7 +150,8 @@ export function useDashboardData(
       refresh();
     }, supportsLiveStream ? Math.min(1500, Math.max(500, refreshIntervalMs / 2)) : 0);
     const timer = window.setInterval(() => {
-      if (lastSnapshotAt && Date.now() - lastSnapshotAt < refreshIntervalMs * 2.5) return;
+      if (isMqttHeartbeatFresh(lastMqttPortSnapshotAt, Date.now(), refreshIntervalMs)) return;
+      if (lastSnapshotAt && Date.now() - lastSnapshotAt < refreshIntervalMs * 2) return;
       refresh();
     }, refreshIntervalMs);
 
@@ -119,5 +163,5 @@ export function useDashboardData(
     };
   }, [targetUrl, deviceKey, refreshIntervalMs, refreshToken, enabled, onConfigUpdate, onAuthRequired]);
 
-  return { data, deviceStatus, transportState, updatedAt, retry: () => setRefreshToken((token) => token + 1) };
+  return { data, deviceStatus, frontendTransportState, transportState, updatedAt, retry: () => setRefreshToken((token) => token + 1) };
 }

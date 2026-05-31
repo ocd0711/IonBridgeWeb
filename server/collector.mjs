@@ -1,7 +1,7 @@
 import { requireDeviceKey } from "./db.mjs";
 import { normalizeTarget } from "./target-security.mjs";
 
-export function createCollector({ store, fetchMachineInfo, fetchJson, refreshConfig, broadcast }) {
+export function createCollector({ store, fetchMachineInfo, fetchJson, refreshConfig, broadcast, onTargetOnline }) {
   const timers = new Map();
   const collectingTargets = new Set();
   const stats = new Map();
@@ -42,6 +42,7 @@ export function createCollector({ store, fetchMachineInfo, fetchJson, refreshCon
     try {
       const machineInfo = await fetchMachineInfo(normalizedTarget);
       const deviceKey = requireDeviceKey(machineInfo);
+      void onTargetOnline?.(normalizedTarget, deviceKey).catch(() => {});
       const [metrics, heap] = await Promise.all([
         fetchJson(new URL("/metrics.json", normalizedTarget).toString(), 8000),
         fetchJson(new URL("/heapz", normalizedTarget).toString(), 3500).catch(() => null),
@@ -66,6 +67,7 @@ export function createCollector({ store, fetchMachineInfo, fetchJson, refreshCon
       const config = await refreshConfig();
       const snapshot = {
         type: "snapshot",
+        source: "http",
         deviceKey,
         targetUrl: normalizedTarget,
         ts,

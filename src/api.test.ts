@@ -6,6 +6,7 @@ import {
   fetchOfflineDashboardData,
   fetchServerHistory,
   liveStreamUrl,
+  mergeLiveDashboardData,
   normalizeDeviceTarget,
 } from "./api";
 
@@ -207,8 +208,9 @@ describe("online dashboard history", () => {
     expect(historicalSample?.state).toBe("ATTACHED");
   });
 
-  it("keeps live power history when metrics omit temperature", async () => {
+  it("fills live port temperatures from recent history when metrics omit temperature", async () => {
     stubLocalStorage();
+    const sampleTs = Date.now() - 10_000;
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes("/metrics.json")) {
@@ -251,19 +253,212 @@ describe("online dashboard history", () => {
           ports: [{ port: 1, samples: [{ voltage: 9000, current: 1000000 }] }],
         });
       }
-      if (url.includes("/api/history")) return jsonResponse({ rows: [] });
+      if (url.includes("/api/history")) {
+        return jsonResponse({
+          rows: [{
+            ts: sampleTs,
+            target: "http://device.local",
+            port: 1,
+            active: true,
+            attached: true,
+            voltage: 9000,
+            current: 1000000,
+            state: "ATTACHED",
+            temperature_c: 61,
+            power_w: 9,
+            protocol: "PD",
+          }],
+        });
+      }
       if (url.includes("/heapz")) return jsonResponse({ total_free: 1, total_allocated: 1, largest_free_block: 1, min_free: 1, allocated_blocks: 1, free_blocks: 1, total_blocks: 2 });
       return new Response("window.__INFOZ={\"psn\":\"psn-1\",\"ble_mac\":\"\",\"wifi_mac\":\"\",\"hw_rev\":\"\",\"device_model\":\"\",\"device_name\":\"\",\"product_family\":\"\",\"product_color\":\"\",\"esp32_version\":\"\",\"mcu_version\":\"\",\"fpga_version\":\"\",\"zrlib_version\":\"\",\"country_code\":\"\",\"mdns_hostname\":\"\"};");
     });
     vi.stubGlobal("fetch", fetchMock);
 
     const dashboard = await fetchDashboardData("http://device.local", "psn-1");
-    const sample = dashboard.history.ports[0].samples.at(-1);
+    const historicalSample = dashboard.history.ports[0].samples.find((sample) => sample.ts === sampleTs);
 
     expect(dashboard.source).toBe("device");
-    expect(sample?.voltage).toBe(9000);
-    expect(sample?.current).toBe(1000000);
-    expect(sample?.temperature_c).toBeUndefined();
+    expect(historicalSample?.voltage).toBe(9000);
+    expect(historicalSample?.current).toBe(1000000);
+    expect(historicalSample?.temperature_c).toBe(61);
+    expect(dashboard.metrics.ports[0].die_temperature).toBe(61);
+  });
+
+  it("does not fill live port temperatures from stale history", async () => {
+    stubLocalStorage();
+    const sampleTs = Date.now() - 10 * 60_000;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/metrics.json")) {
+        return jsonResponse({
+          ports: [
+            {
+              id: 1,
+              active: true,
+              state: "ATTACHED",
+              port_type: "C",
+              attached: true,
+              charging_duration_seconds: 0,
+              fc_protocol: 0,
+              current: 1000000,
+              voltage: 9000,
+              vin_value: 0,
+              session_id: 0,
+              session_charge: 0,
+              power_budget: 100,
+              pd_status: null,
+            },
+          ],
+          system: {
+            chip: "ESP32",
+            cores: 2,
+            cpu_freq_mhz: 240,
+            idf_version: "idf",
+            app_version: "app",
+            boot_time_seconds: 1,
+            reset_reason: 0,
+            free_heap: 1,
+          },
+          tasks: [],
+          wifi: { ssid: "wifi", bssid: "bssid", channel: 1, rssi: -50 },
+        });
+      }
+      if (url.includes("/porthistoryz")) {
+        return jsonResponse({
+          sample_period_ms: 30000,
+          ports: [{ port: 1, samples: [{ voltage: 9000, current: 1000000 }] }],
+        });
+      }
+      if (url.includes("/api/history")) {
+        return jsonResponse({
+          rows: [{
+            ts: sampleTs,
+            target: "http://device.local",
+            port: 1,
+            active: true,
+            attached: true,
+            voltage: 9000,
+            current: 1000000,
+            state: "ATTACHED",
+            temperature_c: 61,
+            power_w: 9,
+            protocol: "PD",
+          }],
+        });
+      }
+      if (url.includes("/heapz")) return jsonResponse({ total_free: 1, total_allocated: 1, largest_free_block: 1, min_free: 1, allocated_blocks: 1, free_blocks: 1, total_blocks: 2 });
+      return new Response("window.__INFOZ={\"psn\":\"psn-1\",\"ble_mac\":\"\",\"wifi_mac\":\"\",\"hw_rev\":\"\",\"device_model\":\"\",\"device_name\":\"\",\"product_family\":\"\",\"product_color\":\"\",\"esp32_version\":\"\",\"mcu_version\":\"\",\"fpga_version\":\"\",\"zrlib_version\":\"\",\"country_code\":\"\",\"mdns_hostname\":\"\"};");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const dashboard = await fetchDashboardData("http://device.local", "psn-1");
+
     expect(dashboard.metrics.ports[0].die_temperature).toBeUndefined();
+  });
+});
+
+describe("live dashboard MQTT/HTTP merge", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("keeps MQTT ports while HTTP fills system and task data during the active window", () => {
+    stubLocalStorage();
+    const deviceKey = "psn-mqtt-active";
+    const targetUrl = "http://device.local";
+    const baseMachineInfo = {
+      psn: deviceKey,
+      ble_mac: "",
+      wifi_mac: "",
+      hw_rev: "",
+      device_model: "ultra",
+      device_name: "CP02",
+      product_family: "CP02",
+      product_color: "gray",
+      esp32_version: "",
+      mcu_version: "",
+      fpga_version: "",
+      zrlib_version: "",
+      country_code: "",
+      mdns_hostname: "",
+    };
+    const mqttMetrics = {
+      ports: [{
+        id: 1,
+        active: true,
+        state: "ATTACHED",
+        port_type: "C" as const,
+        attached: true,
+        charging_duration_seconds: 0,
+        fc_protocol: 0,
+        current: 1000000,
+        voltage: 9000,
+        die_temperature: 66,
+        vin_value: 0,
+        session_id: 0,
+        session_charge: 0,
+        power_budget: 100,
+        pd_status: null,
+      }],
+      system: {
+        chip: "",
+        cores: 0,
+        cpu_freq_mhz: 0,
+        idf_version: "",
+        app_version: "",
+        boot_time_seconds: 0,
+        reset_reason: 0,
+        free_heap: 0,
+      },
+      tasks: [],
+      wifi: { ssid: "", bssid: "", channel: 0, rssi: 0 },
+    };
+    const httpMetrics = {
+      ...mqttMetrics,
+      ports: [{ ...mqttMetrics.ports[0], current: 2000000, voltage: 5000, die_temperature: 44 }],
+      system: {
+        chip: "esp32c3",
+        cores: 1,
+        cpu_freq_mhz: 160,
+        idf_version: "v5",
+        app_version: "2.0.3",
+        boot_time_seconds: 12,
+        reset_reason: 3,
+        free_heap: 1234,
+      },
+      tasks: [{ name: "httpd", stack_watermark_bytes: 1024, cpu_percent: 1.2 }],
+      wifi: { ssid: "OCD", bssid: "aa", channel: 6, rssi: -40 },
+    };
+
+    const afterMqtt = mergeLiveDashboardData(null, {
+      type: "snapshot",
+      source: "mqtt",
+      deviceKey,
+      targetUrl,
+      ts: Date.now(),
+      metrics: mqttMetrics,
+      heap: null,
+      machineInfo: baseMachineInfo,
+      config: { targetUrl, refreshIntervalMs: 2000, targets: [], mqtt: undefined },
+    });
+    const afterHttp = mergeLiveDashboardData(afterMqtt, {
+      type: "snapshot",
+      source: "http",
+      deviceKey,
+      targetUrl,
+      ts: Date.now() + 1000,
+      metrics: httpMetrics,
+      heap: null,
+      machineInfo: baseMachineInfo,
+      config: { targetUrl, refreshIntervalMs: 2000, targets: [], mqtt: undefined },
+    });
+
+    expect(afterHttp.metrics.ports[0].voltage).toBe(9000);
+    expect(afterHttp.metrics.ports[0].current).toBe(1000000);
+    expect(afterHttp.metrics.ports[0].die_temperature).toBe(66);
+    expect(afterHttp.metrics.tasks[0].name).toBe("httpd");
+    expect(afterHttp.metrics.system.chip).toBe("esp32c3");
+    expect(afterHttp.history.ports[0].samples).toHaveLength(1);
   });
 });

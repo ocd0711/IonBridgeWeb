@@ -1,13 +1,15 @@
-import { clampInterval, normalizeDeviceKey, requireDeviceKey } from "./db.mjs";
+import { clampInterval, normalizeDeviceKey, normalizeMqttBrokerUrl, requireDeviceKey } from "./db.mjs";
 import { normalizeTarget } from "./target-security.mjs";
 
 export function createRoutes({
   store,
   collector,
+  mqttBridge,
   live,
   getConfig,
   refreshConfig,
   fetchMachineInfo,
+  ensureDeviceMqttBroker,
   fetchTarget,
   defaultIntervalMs,
   retentionDays,
@@ -37,6 +39,7 @@ export function createRoutes({
       ok: true,
       retentionDays,
       liveClients: live.clientCount(),
+      mqtt: mqttPayload(),
       collectors: store.listTargets().map((target) => {
         const sample = sampleCounts.get(target.deviceKey) ?? {};
         return {
@@ -52,6 +55,96 @@ export function createRoutes({
         };
       }),
     };
+  }
+
+  function mqttPayload() {
+    return {
+      config: store.getMqttConfig(),
+      status: mqttBridge.status(),
+    };
+  }
+
+  async function handleMqttConfig(req, res) {
+    const body = await readJson(req);
+    try {
+      const enabled = Boolean(body.enabled);
+      const brokerUrl = normalizeMqttBrokerUrl(body.brokerUrl);
+      const currentTarget = getConfig().targetUrl;
+      const existingMqtt = store.getMqttConnectionOptions();
+      const username = String(body.username ?? "").trim();
+      const password = body.password === undefined ? existingMqtt.password : String(body.password ?? "");
+      if (enabled && !brokerUrl) return sendJson(res, { error: "MQTT broker URL is required" }, 400);
+      if (enabled && !currentTarget) return sendJson(res, { error: "target device is required" }, 400);
+      if (currentTarget) await ensureDeviceMqttBroker(currentTarget, { enabled, brokerUrl, username, password });
+      store.setMqttConfig({
+        enabled,
+        brokerUrl,
+        username,
+        password,
+      });
+    } catch (error) {
+      return sendJson(res, { error: error instanceof Error ? error.message : "invalid MQTT config" }, 400);
+    }
+    mqttBridge.reconnect();
+    const nextConfig = await refreshConfig();
+    sendJson(res, { config: nextConfig, mqtt: mqttPayload() });
+  }
+
+  async function handleMqttStream(req, res) {
+    const body = await readJson(req);
+    const deviceKey = normalizeDeviceKey(body.deviceKey);
+    if (!deviceKey) return sendJson(res, { error: "deviceKey is required" }, 400);
+    const target = store.savedProxyTarget({ deviceKey });
+    if (!target) return sendJson(res, { error: "device is not saved" }, 404);
+    try {
+      await mqttBridge.setTelemetryStream(deviceKey, body.enabled !== false);
+    } catch (error) {
+      return sendJson(res, { error: error instanceof Error ? error.message : "MQTT command failed" }, mqttErrorStatus(error));
+    }
+    sendJson(res, { ok: true, mqtt: mqttPayload() });
+  }
+
+  async function handleMqttPort(req, res) {
+    const body = await readJson(req);
+    const deviceKey = normalizeDeviceKey(body.deviceKey);
+    if (!deviceKey) return sendJson(res, { error: "deviceKey is required" }, 400);
+    const target = store.savedProxyTarget({ deviceKey });
+    if (!target) return sendJson(res, { error: "device is not saved" }, 404);
+    try {
+      await mqttBridge.setPortPower(deviceKey, body.port, Boolean(body.enabled));
+    } catch (error) {
+      return sendJson(res, { error: error instanceof Error ? error.message : "MQTT command failed" }, mqttErrorStatus(error));
+    }
+    sendJson(res, { ok: true, mqtt: mqttPayload() });
+  }
+
+  async function handleMqttControl(req, res) {
+    const body = await readJson(req);
+    const deviceKey = normalizeDeviceKey(body.deviceKey);
+    if (!deviceKey) return sendJson(res, { error: "deviceKey is required" }, 400);
+    const target = store.savedProxyTarget({ deviceKey });
+    if (!target) return sendJson(res, { error: "device is not saved" }, 404);
+    try {
+      await assertMqttControlAllowed(body.action, target, body.params ?? {});
+      await mqttBridge.sendControl(deviceKey, body.action, body.params ?? {});
+    } catch (error) {
+      return sendJson(res, { error: error instanceof Error ? error.message : "MQTT command failed" }, mqttErrorStatus(error));
+    }
+    sendJson(res, { ok: true, mqtt: mqttPayload() });
+  }
+
+  async function handleMqttState(req, res) {
+    const body = await readJson(req);
+    const deviceKey = normalizeDeviceKey(body.deviceKey);
+    if (!deviceKey) return sendJson(res, { error: "deviceKey is required" }, 400);
+    const target = store.savedProxyTarget({ deviceKey });
+    if (!target) return sendJson(res, { error: "device is not saved" }, 404);
+    try {
+      const result = await mqttBridge.queryControlState(deviceKey, Array.isArray(body.ports) ? body.ports : []);
+      sendJson(res, { ok: true, ...result, mqtt: mqttPayload() });
+    } catch (error) {
+      return sendJson(res, { error: error instanceof Error ? error.message : "MQTT state query failed" }, mqttErrorStatus(error));
+    }
   }
 
   async function handleConfig(req, res) {
@@ -85,7 +178,9 @@ export function createRoutes({
     const deviceKey = store.savedTargetDeviceKey(targetUrl);
     if (!deviceKey) return sendJson(res, { error: "target is not saved" }, 404);
     store.setSetting("active_device_key", deviceKey);
-    sendJson(res, await refreshConfig());
+    const nextConfig = await refreshConfig();
+    void ensureDeviceMqttBroker(targetUrl).catch(() => {});
+    sendJson(res, nextConfig);
   }
 
   async function handleUpdateTarget(req, res) {
@@ -142,6 +237,24 @@ export function createRoutes({
     });
   }
 
+  function mqttErrorStatus(error) {
+    const message = error instanceof Error ? error.message : "";
+    return /out of range|required|must be|unsupported|only available/i.test(message) ? 400 : 409;
+  }
+
+  async function assertMqttControlAllowed(action, target, params = {}) {
+    const needsMirrorDisplay = action === "displaySetup" || (action === "displayMode" && Number(params.mode) === 1);
+    if (!needsMirrorDisplay) return;
+    const machineInfo = await fetchMachineInfo(target);
+    const isMirror02s = machineInfo?.product_family === "CP02s";
+    if (action === "displayMode" && Number(params.mode) === 1 && !isMirror02s) {
+      throw new Error("manual display mode is only available on CP02s");
+    }
+    if (action === "displaySetup" && !isMirror02s) {
+      throw new Error("display setup is only available on CP02s");
+    }
+  }
+
   async function proxyFetch(req, res, targetUrl) {
     const response = await fetchTarget(targetUrl, { method: req.method, headers: { accept: req.headers.accept ?? "*/*" } });
     res.statusCode = response.status;
@@ -157,6 +270,12 @@ export function createRoutes({
     handleHistory,
     statusPayload,
     handleConfig,
+    mqttPayload,
+    handleMqttConfig,
+    handleMqttStream,
+    handleMqttPort,
+    handleMqttControl,
+    handleMqttState,
     handleSetActiveTarget,
     handleUpdateTarget,
     handleDeleteTarget,

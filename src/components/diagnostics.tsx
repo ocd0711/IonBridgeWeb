@@ -3,6 +3,7 @@ import { Filter } from "lucide-react";
 import { Area, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
 import { fetchServerHistory, type ServerHistoryRow } from "../api";
+import { ChartZoomControl, downsampleChartRows, useChartZoom } from "./chartControls";
 import {
   amps,
   formatDuration,
@@ -265,9 +266,28 @@ function PortHistoryExplorer({
   const isQueryingHistory = serverStatus === "loading";
   const canShowQueriedSeries = serverSeries.length > 0 || !isQueryingHistory;
   const selectedSeries = serverSeries.length > 0 ? serverSeries : isQueryingHistory ? [] : localSeries;
+  const portZoomResetKey = [
+    selectedPortId ?? "none",
+    targetUrl,
+    deviceKey ?? "",
+    rangeMode,
+    hours,
+    customStart,
+    customEnd,
+    serverRows.length > 0 ? "server" : "local",
+  ].join("|");
+  const [zoomRange, setZoomRange] = useChartZoom(selectedSeries.length, portZoomResetKey);
+  const visibleSelectedSeries = React.useMemo(
+    () => selectedSeries.slice(zoomRange.start, zoomRange.end + 1),
+    [selectedSeries, zoomRange.end, zoomRange.start],
+  );
+  const renderSelectedSeries = React.useMemo(
+    () => downsampleChartRows(visibleSelectedSeries, ["power", "temperature"]),
+    [visibleSelectedSeries],
+  );
   const visibleSeriesPoints = selectedSeries.filter((sample) => sample.power != null || sample.temperature != null).length;
   const hasInsufficientServerSeries = serverStatus === "ready" && serverSeries.length > 0 && visibleSeriesPoints < 2;
-  const powers = selectedSeries.map((sample) => sample.power);
+  const powers = visibleSelectedSeries.map((sample) => sample.power);
   const min = powers.length > 0 ? Math.min(...powers) : 0;
   const max = powers.length > 0 ? Math.max(...powers) : 0;
   const avg = powers.reduce((sum, power) => sum + power, 0) / Math.max(powers.length, 1);
@@ -364,7 +384,7 @@ function PortHistoryExplorer({
           <div className="history-query-shell">
             <div className="history-chart-shell">
             <ResponsiveContainer width="100%" height={230}>
-              <ComposedChart data={selectedSeries} margin={{ top: 12, right: 18, left: -22, bottom: 0 }}>
+              <ComposedChart data={renderSelectedSeries} margin={{ top: 12, right: 18, left: -22, bottom: 10 }}>
                 <defs>
                   <linearGradient id="portDetailFill" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="0%" stopColor="#f47b20" stopOpacity={0.36} />
@@ -407,6 +427,15 @@ function PortHistoryExplorer({
               </ComposedChart>
             </ResponsiveContainer>
             </div>
+            <ChartZoomControl
+              count={selectedSeries.length}
+              end={zoomRange.end}
+              endLabel={selectedSeries[zoomRange.end]?.time}
+              onChange={setZoomRange}
+              start={zoomRange.start}
+              startLabel={selectedSeries[zoomRange.start]?.time}
+              t={t}
+            />
             <div className="trend-stats">
               <span>{t("min")} {min.toFixed(2)}W</span>
               <span>{t("avg")} {avg.toFixed(2)}W</span>
@@ -415,14 +444,14 @@ function PortHistoryExplorer({
             <div className="port-va-charts">
               <MetricTrendChart
                 color="#2f806c"
-                data={selectedSeries}
+                data={visibleSelectedSeries}
                 dataKey="voltage"
                 title={`${t("voltage")} (V)`}
                 unit="V"
               />
               <MetricTrendChart
                 color="#6f5aa8"
-                data={selectedSeries}
+                data={visibleSelectedSeries}
                 dataKey="current"
                 title={`${t("current")} (A)`}
                 unit="A"
@@ -519,11 +548,12 @@ function MetricTrendChart({
   title: string;
   unit: string;
 }) {
+  const renderData = React.useMemo(() => downsampleChartRows(data, [dataKey]), [data, dataKey]);
   return (
     <div className="metric-trend-card">
       <h4>{title}</h4>
-      <ResponsiveContainer width="100%" height={150}>
-        <ComposedChart data={data} margin={{ top: 8, right: 12, left: -24, bottom: 0 }}>
+      <ResponsiveContainer width="100%" height={170}>
+        <ComposedChart data={renderData} margin={{ top: 8, right: 12, left: -24, bottom: 26 }}>
           <CartesianGrid stroke="#e6dfd4" vertical={false} />
           <XAxis dataKey="time" tickLine={false} axisLine={false} tick={{ fill: "#766b5f", fontSize: 11 }} />
           <YAxis domain={["auto", "auto"]} tickLine={false} axisLine={false} tick={{ fill: "#766b5f", fontSize: 11 }} />
@@ -604,11 +634,12 @@ export function MultiMetricTrendChart({
   title: string;
   unit: string;
 }) {
+  const renderData = React.useMemo(() => downsampleChartRows(data, keys), [data, keys]);
   return (
     <div className="metric-trend-card">
       <h4>{title}</h4>
-      <ResponsiveContainer width="100%" height={150}>
-        <ComposedChart data={data} margin={{ top: 8, right: 12, left: -24, bottom: 0 }}>
+      <ResponsiveContainer width="100%" height={170}>
+        <ComposedChart data={renderData} margin={{ top: 8, right: 12, left: -24, bottom: 26 }}>
           <CartesianGrid stroke="var(--chart-grid)" vertical={false} />
           <XAxis dataKey="time" tickLine={false} axisLine={false} tick={{ fill: "var(--chart-axis)", fontSize: 11 }} />
           <YAxis

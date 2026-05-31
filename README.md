@@ -88,9 +88,27 @@ docker compose up -d --build
 http://localhost:18318/
 ```
 
+Compose 会同时启动一个 EMQX broker：
+
+```text
+MQTT:      mqtt://<宿主机局域网 IP>:1883
+Dashboard: http://localhost:18083/
+```
+
+设备不能使用 `mqtt://127.0.0.1:1883`，也不能使用容器内部的 `mqtt://emqx:1883`。设备要连的是宿主机在局域网里的地址，例如 `mqtt://192.168.1.118:1883`。IonBridgeWeb 运行在容器内时也可以连接这个宿主机地址；它会把同一个地址通过 `/setbrokerz` 写入设备。
+
+EMQX 管理后台默认用户是 `admin`，默认密码在 `docker-compose.yml` 里通过 `EMQX_DASHBOARD__DEFAULT_PASSWORD` 设置，部署前应修改。默认 MQTT 监听端口 `1883` 未配置客户端认证，适合内网测试；如果要映射到公网，必须在 EMQX 后台配置认证、ACL 或 TLS。
+
 `docker-compose.yml` 中常用环境变量：
 
 ```yaml
+emqx:
+  ports:
+    - "1883:1883"
+    - "18083:18083"
+  environment:
+    EMQX_DASHBOARD__DEFAULT_PASSWORD: "change-me"
+
 environment:
   IONBRIDGE_RETENTION_DAYS: "30"
   IONBRIDGE_ALLOWED_TARGETS: "192.168.0.0/16,10.0.0.0/8,172.16.0.0/12,*.local"
@@ -103,6 +121,8 @@ volumes:
 
 volumes:
   ionbridge-data:
+  emqx-data:
+  emqx-log:
 ```
 
 - `IONBRIDGE_RETENTION_DAYS`: 服务端历史保留天数，默认 30 天。
@@ -112,6 +132,7 @@ volumes:
 - `IONBRIDGE_SHOW_APPEARANCE_SWITCHER`: 是否显示外观主题调试切换器，默认 `false`。关闭时外观始终跟随设备识别结果。
 - `IONBRIDGE_PASSWORD`: 设置后启用登录保护；不设置则不要求登录。
 - `/data`: 持久化配置和历史数据。推荐使用 Docker named volume，避免非 root 容器用户写入宿主机 bind mount 时遇到 SQLite 只读错误。
+- `emqx-data` / `emqx-log`: 持久化 EMQX 数据和日志。
 
 建议在 Docker 或任何局域网可访问部署中设置 `IONBRIDGE_PASSWORD`。不设置密码时，任何能访问服务端口的设备都可以查看面板、切换设备和删除历史数据。
 
@@ -159,6 +180,48 @@ Docker/生产服务模式下，所有已保存设备都会被后台同时采集�
 已保存设备支持备注。备注只用于页面展示和识别设备，不参与设备唯一键；设备唯一键仍然只使用 PSN。
 
 目标当前连不上但 SQLite 里已有历史样本时，页面仍会进入监控面板，实时状态显示为 `离线`，历史图表和长时间筛选继续可用。只有当前地址既连不上、又没有任何历史样本时，才会进入目标地址配置页。
+
+## MQTT 接管
+
+服务端支持连接 MQTT broker，用于接收固件实时遥测流和发送控制命令。右上角齿轮里的「MQTT 接管」可以配置：
+
+- Broker 地址，例如 `mqtt://192.168.31.30:1883`、`mqtts://broker.example.com:8883`。
+- MQTT 用户名和密码。
+- 是否启用 MQTT。
+
+启用后服务端会订阅：
+
+```text
+device/+/telemetry/+
+device/+/enduser/response/+
+```
+
+对已经通过 HTTP 保存过、并且能用 PSN 匹配到的设备，服务端会把 MQTT 端口流写入 SQLite，并通过现有 `/api/live` SSE 推送到页面。端口卡片上的开关按钮会通过 MQTT 发送固件已有的 `TURN_ON_PORT` / `TURN_OFF_PORT` 命令；设备设置里也可以手动启动或停止遥测流。
+
+「设备控制」折叠面板提供经过白名单校验的常用控制。控制 API 会等待固件 `CommandResponse` 返回，固件确认成功后前端才会显示完成；断线、超时或固件拒绝都会返回错误。
+
+- 整机开关、重启。
+- 启动/停止遥测流。
+- 单端口开关。
+- 充电策略、温控策略。充电策略按固件运行时枚举暴露：慢充、兼容快充、高性能、单口极速。
+- 临时功率分配。
+- TFCP / FCP / UFCS / SCP 兼容协议开关。
+- 自定义 PDO 电压。
+- 线补配置。
+- 屏幕亮度、屏显模式、旋转和待机动画。
+
+以下固件命令没有放进普通 Web UI：license、OTA、清 NVS、原始 MCU forward、GPIO/ADC、工厂态切换。这些命令风险高或偏调试用途，不适合在日常监控面板里直接暴露。
+
+保存 MQTT 配置时，服务端会先从设备首页的 `window.__CONFIG.broker` 读取当前 broker。只有当前值和 IonBridgeWeb 配置不一致时，才会调用设备 HTTP 接口写入：
+
+```text
+POST /setbrokerz
+body: mqtt://host:1883
+```
+
+如果配置了 MQTT 用户名或密码，服务端会把它们写入 broker URI，例如 `mqtt://user:pass@host:1883`。点击「恢复默认」会对当前设备调用空 body 的 `POST /setbrokerz`，清除设备里的自定义 broker，并同步清空 IonBridgeWeb 本地 SQLite 中的 MQTT 配置。
+
+如果 broker 暴露在局域网或公网，必须配置账号密码、ACL 或 TLS。设备接入自定义 broker 后，能向 `device/{psn}/enduser/request/+` 发布消息的一方就可以控制设备端口和配置。
 
 ## 刷新频率
 

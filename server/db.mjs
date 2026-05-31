@@ -40,7 +40,35 @@ export function createStore({ databasePath, defaultIntervalMs, retentionDays }) 
       refreshIntervalMs: activeEntry?.refreshIntervalMs ?? defaultIntervalMs,
       showAppearanceSwitcher,
       targets,
+      mqtt: getMqttConfig(),
     };
+  }
+
+  function getMqttConfig() {
+    const brokerUrl = getSetting("mqtt_broker_url", "");
+    const username = getSetting("mqtt_username", "");
+    return {
+      enabled: getSetting("mqtt_enabled", "false") === "true",
+      brokerUrl,
+      username,
+      configured: Boolean(brokerUrl),
+      hasPassword: Boolean(getSetting("mqtt_password", "")),
+    };
+  }
+
+  function getMqttConnectionOptions() {
+    const config = getMqttConfig();
+    return {
+      ...config,
+      password: getSetting("mqtt_password", ""),
+    };
+  }
+
+  function setMqttConfig({ enabled, brokerUrl, username, password }) {
+    setSetting("mqtt_enabled", enabled ? "true" : "false");
+    setSetting("mqtt_broker_url", normalizeMqttBrokerUrl(brokerUrl));
+    setSetting("mqtt_username", String(username ?? "").trim());
+    if (password !== undefined) setSetting("mqtt_password", String(password ?? ""));
   }
 
   function upsertVerifiedTarget({ deviceKey, targetUrl, refreshIntervalMs, note = null, active, status = "online", error = null }) {
@@ -248,6 +276,9 @@ export function createStore({ databasePath, defaultIntervalMs, retentionDays }) 
     setSetting,
     listTargets,
     loadConfig,
+    getMqttConfig,
+    getMqttConnectionOptions,
+    setMqttConfig,
     upsertVerifiedTarget,
     markTargetStatus,
     markTargetStatusByTarget,
@@ -442,4 +473,20 @@ export function requireDeviceKey(machineInfo) {
 
 export function clampInterval(value, defaultIntervalMs = 30000) {
   return Math.max(1000, Math.min(60000, Math.round(Number.isFinite(value) ? value : defaultIntervalMs)));
+}
+
+export function normalizeMqttBrokerUrl(value) {
+  const brokerUrl = String(value ?? "").trim().replace(/\/+$/, "");
+  if (!brokerUrl) return "";
+  let url;
+  try {
+    url = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(brokerUrl) ? brokerUrl : `mqtt://${brokerUrl}`);
+  } catch {
+    throw new Error("invalid MQTT broker URL");
+  }
+  if (!["mqtt:", "mqtts:", "ws:", "wss:"].includes(url.protocol)) {
+    throw new Error("MQTT broker protocol is not allowed");
+  }
+  if (!url.hostname) throw new Error("MQTT broker host is required");
+  return url.toString().replace(/\/$/, "");
 }

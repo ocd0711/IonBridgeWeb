@@ -3,6 +3,7 @@ import { Activity, Database, Filter } from "lucide-react";
 import { Area, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
 import { fetchServerHistory, type ServerHistoryRow } from "../api";
+import { ChartZoomControl, downsampleChartRows, useChartZoom } from "./chartControls";
 import { MultiMetricTrendChart } from "./diagnostics";
 import { amps, portLabel, sampleRuntimeState, volts, watts, type PortRuntimeState } from "../format";
 import type { DashboardData, LiveTransportState } from "../hooks/useDashboardData";
@@ -54,6 +55,49 @@ type ServerHistoryChartRow = {
   time: string;
   ts: number;
 };
+type LiveChartRow = Record<string, number | string | null> & {
+  temperature: number | null;
+  time: string;
+  ts: number;
+};
+const LIVE_TEMPERATURE_HOLD_MS = 15_000;
+type ChartStep = "auto" | "raw" | number;
+const CHART_STEP_OPTIONS: Array<{ value: string; label: TranslationKey }> = [
+  { value: "auto", label: "autoStep" },
+  { value: "raw", label: "rawStep" },
+  { value: "1000", label: "step1s" },
+  { value: "5000", label: "step5s" },
+  { value: "10000", label: "step10s" },
+  { value: "30000", label: "step30s" },
+  { value: "60000", label: "step1m" },
+  { value: "300000", label: "step5m" },
+];
+
+function ChartStepControl({
+  value,
+  onChange,
+  t,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  t: (key: TranslationKey) => string;
+}) {
+  return (
+    <label className="chart-step-control">
+      <span className="chart-step-icon" aria-hidden="true">
+        <Activity size={15} strokeWidth={2.2} />
+      </span>
+      <span className="chart-step-copy">
+        <span>{t("chartStep")}</span>
+        <select value={value} onChange={(event) => onChange(event.target.value)} aria-label={t("chartStep")}>
+          {CHART_STEP_OPTIONS.map((option) => (
+            <option key={option.value} value={option.value}>{t(option.label)}</option>
+          ))}
+        </select>
+      </span>
+    </label>
+  );
+}
 
 function getHistoryCoverageLabel(history: PortHistory, t: (key: TranslationKey) => string) {
   const samples = Math.max(...history.ports.map((port) => port.samples.length), 0);
@@ -80,6 +124,15 @@ function formatSampleTime(
   return `${Math.round(((sampleCount - index - 1) * samplePeriodMs) / 60000)}m`;
 }
 
+function formatChartTime(ts: number) {
+  return new Date(ts).toLocaleTimeString("zh-CN", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+}
+
 export function LongHistoryPanel({
   targetUrl,
   deviceKey,
@@ -102,6 +155,7 @@ export function LongHistoryPanel({
   const [customStart, setCustomStart] = React.useState(formatDateTimeLocal(new Date(now.getTime() - 24 * 60 * 60 * 1000)));
   const [customEnd, setCustomEnd] = React.useState(formatDateTimeLocal(now));
   const [portFilter, setPortFilter] = React.useState<number | null>(null);
+  const [chartStep, setChartStep] = React.useState<string>("auto");
   const [rows, setRows] = React.useState<ServerHistoryRow[]>([]);
   const pendingLiveRowsRef = React.useRef<ServerHistoryRow[]>([]);
   const statusRef = React.useRef<"loading" | "ready" | "empty" | "unavailable">("loading");
@@ -198,11 +252,30 @@ export function LongHistoryPanel({
     });
   }, [targetUrl, isLive, metrics, hours, rangeMode, portFilter, updatedAt, canQuery, start, end]);
 
-  const chartRows = React.useMemo(() => buildServerHistoryChartRows(rows), [rows]);
-  const powerValues = chartRows.map((row) => row.power).filter((value): value is number => typeof value === "number");
+  const chartRows = React.useMemo(() => buildServerHistoryChartRows(rows, parseChartStep(chartStep)), [chartStep, rows]);
+  const historyZoomResetKey = [
+    targetUrl,
+    deviceKey ?? "",
+    rangeMode,
+    hours,
+    customStart,
+    customEnd,
+    portFilter ?? "all",
+    chartStep,
+  ].join("|");
+  const [zoomRange, setZoomRange] = useChartZoom(chartRows.length, historyZoomResetKey);
+  const visibleChartRows = React.useMemo(
+    () => chartRows.slice(zoomRange.start, zoomRange.end + 1),
+    [chartRows, zoomRange.end, zoomRange.start],
+  );
+  const renderChartRows = React.useMemo(
+    () => downsampleChartRows(visibleChartRows, ["power", "temperature"]),
+    [visibleChartRows],
+  );
+  const powerValues = visibleChartRows.map((row) => row.power).filter((value): value is number => typeof value === "number");
   const avgPower = powerValues.reduce((sum, value) => sum + value, 0) / Math.max(powerValues.length, 1);
   const maxPower = powerValues.length > 0 ? Math.max(...powerValues) : 0;
-  const maxTemp = maxValidTemperature(chartRows.map((row) => row.temperature));
+  const maxTemp = maxValidTemperature(visibleChartRows.map((row) => row.temperature));
   const visibleChartPoints = chartRows.filter((row) => row.power != null || row.temperature != null).length;
   const canShowChart = status === "ready" || (status === "loading" && loadedAt != null && rows.length > 0);
   const showInsufficientState = status === "ready" && visibleChartPoints < 2;
@@ -257,6 +330,7 @@ export function LongHistoryPanel({
               ))}
             </select>
           </label>
+          <ChartStepControl value={chartStep} onChange={setChartStep} t={t} />
         </div>
       </div>
 
@@ -264,7 +338,7 @@ export function LongHistoryPanel({
         <>
           <div className="history-chart-shell">
             <ResponsiveContainer width="100%" height={280}>
-              <ComposedChart data={chartRows} margin={{ top: 10, right: 12, left: -18, bottom: 0 }}>
+              <ComposedChart data={renderChartRows} margin={{ top: 10, right: 12, left: -18, bottom: 0 }}>
                 <defs>
                   <linearGradient id="serverHistoryFill" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="0%" stopColor="#f47b20" stopOpacity={0.4} />
@@ -312,6 +386,15 @@ export function LongHistoryPanel({
               </div>
             ) : null}
           </div>
+          <ChartZoomControl
+            count={chartRows.length}
+            end={zoomRange.end}
+            endLabel={chartRows[zoomRange.end]?.time}
+            onChange={setZoomRange}
+            start={zoomRange.start}
+            startLabel={chartRows[zoomRange.start]?.time}
+            t={t}
+          />
           <div className="history-stats">
             <span>{t("samples")} {rows.length}</span>
             <span>{t("avg")} {avgPower.toFixed(2)}W</span>
@@ -385,8 +468,8 @@ function mergeServerHistoryRows(rows: ServerHistoryRow[]) {
   return Array.from(bySample.values()).sort((a, b) => a.ts - b.ts || a.port - b.port);
 }
 
-export function buildServerHistoryChartRows(rows: ServerHistoryRow[]) {
-  const bucketMs = chooseHistoryBucketMs(rows);
+export function buildServerHistoryChartRows(rows: ServerHistoryRow[], step: ChartStep = "auto") {
+  const bucketMs = historyBucketMs(rows, step);
   const buckets = new Map<number, {
     ports: Map<number, HistoryPortState & { ts: number }>;
     timeline: Map<number, { power: number; temperature: number | null }>;
@@ -455,6 +538,12 @@ function insertHistoryGaps(rows: ServerHistoryChartRow[], bucketMs: number) {
   return result;
 }
 
+function historyBucketMs(rows: ServerHistoryRow[], step: ChartStep) {
+  if (typeof step === "number") return step;
+  if (step === "raw") return 1000;
+  return chooseHistoryBucketMs(rows);
+}
+
 function chooseHistoryBucketMs(rows: ServerHistoryRow[]) {
   if (rows.length < 2) return 60 * 1000;
   const span = rows[rows.length - 1].ts - rows[0].ts;
@@ -462,6 +551,67 @@ function chooseHistoryBucketMs(rows: ServerHistoryRow[]) {
   if (span > 24 * 60 * 60 * 1000) return 15 * 60 * 1000;
   if (span > 6 * 60 * 60 * 1000) return 5 * 60 * 1000;
   return 60 * 1000;
+}
+
+export function buildLiveChartRows(history: PortHistory, step: ChartStep = "auto"): LiveChartRow[] {
+  const sampleCount = Math.max(...history.ports.map((port) => port.samples.length), 0);
+  const now = Date.now();
+  const bucketMs = liveBucketMs(history.sample_period_ms, step);
+  const buckets = new Map<number, LiveChartRow>();
+  for (const port of history.ports) {
+    const start = now - Math.max(port.samples.length - 1, 0) * history.sample_period_ms;
+    for (const [sampleIndex, sample] of port.samples.entries()) {
+      const ts = sample.ts ?? start + sampleIndex * history.sample_period_ms;
+      const bucket = Math.floor(ts / bucketMs) * bucketMs;
+      const row = buckets.get(bucket) ?? { time: formatChartTime(bucket), ts: bucket, temperature: null };
+      const key = port.port === 0 ? "A" : `C${port.port}`;
+      row[key] = samplePower(sample);
+      row[`${key}V`] = volts(sample.voltage);
+      row[`${key}A`] = amps(sample.current);
+      const temperature = validTemperature(sample.temperature_c);
+      row.temperature = temperature == null
+        ? (row.temperature as number | null | undefined) ?? null
+        : Math.max(Number(row.temperature ?? temperature), temperature);
+      buckets.set(bucket, row);
+    }
+  }
+  const rows = fillShortTemperatureGaps(Array.from(buckets.values()).sort((a, b) => a.ts - b.ts));
+  if (rows.length === 0 && sampleCount > 0) {
+    return Array.from({ length: sampleCount }, (_, index) => ({
+      time: formatSampleTime(undefined, sampleCount, index, history.sample_period_ms),
+      ts: now - (sampleCount - index - 1) * history.sample_period_ms,
+      temperature: null,
+    }));
+  }
+  return rows;
+}
+
+function liveBucketMs(samplePeriodMs: number, step: ChartStep) {
+  if (typeof step === "number") return step;
+  if (step === "raw") return 1000;
+  const period = Number.isFinite(samplePeriodMs) && samplePeriodMs > 0 ? samplePeriodMs : 10_000;
+  return Math.max(1_000, Math.min(5_000, Math.round(period / 2)));
+}
+
+function parseChartStep(value: string): ChartStep {
+  if (value === "auto" || value === "raw") return value;
+  const step = Number(value);
+  return Number.isFinite(step) && step > 0 ? step : "auto";
+}
+
+function fillShortTemperatureGaps(rows: LiveChartRow[]) {
+  let lastTemperature: { value: number; ts: number } | null = null;
+  return rows.map((row) => {
+    const temperature = validTemperature(row.temperature);
+    if (temperature != null) {
+      lastTemperature = { value: temperature, ts: row.ts };
+      return row;
+    }
+    if (lastTemperature && row.ts - lastTemperature.ts <= LIVE_TEMPERATURE_HOLD_MS) {
+      return { ...row, temperature: lastTemperature.value };
+    }
+    return row;
+  });
 }
 
 export function PowerChart({
@@ -476,38 +626,25 @@ export function PowerChart({
   const { t } = useI18n();
   const portKeys = ["A", "C1", "C2", "C3", "C4"];
   const portColors = ["#2b2926", "#f47b20", "#d9571c", "#917a54", "#6d9483"];
-  const chartLegend = portKeys.map((key, index) => ({ key, color: portColors[index], dashed: false }))
-    .concat({ key: "Temp", color: "#7f6d52", dashed: true });
-  const basePort = history.ports.reduce(
-    (longest, port) => (port.samples.length > longest.samples.length ? port : longest),
-    history.ports[0],
+  const [chartStep, setChartStep] = React.useState<string>("auto");
+  const rows = React.useMemo(() => buildLiveChartRows(history, parseChartStep(chartStep)), [chartStep, history]);
+  const [zoomRange, setZoomRange] = useChartZoom(rows.length, `${history.sample_period_ms}|${chartStep}`);
+  const visibleRows = React.useMemo(
+    () => rows.slice(zoomRange.start, zoomRange.end + 1),
+    [rows, zoomRange.end, zoomRange.start],
   );
-  const rows = basePort?.samples.map((_, sampleIndex) => {
-    const row: Record<string, number | string | null> & { time: string } = {
-      time: formatSampleTime(
-        basePort.samples[sampleIndex]?.ts,
-        basePort.samples.length,
-        sampleIndex,
-        history.sample_period_ms,
-      ),
-    };
-
-    for (const port of history.ports) {
-      const sample = port.samples[sampleIndex];
-      const key = port.port === 0 ? "A" : `C${port.port}`;
-      row[key] = sample ? samplePower(sample) : 0;
-      row[`${key}V`] = sample ? volts(sample.voltage) : null;
-      row[`${key}A`] = sample ? amps(sample.current) : null;
-    }
-    row.temperature = maxValidTemperature(history.ports.map((port) => port.samples[sampleIndex]?.temperature_c));
-
-    return row;
-  }) ?? [];
+  const renderRows = React.useMemo(
+    () => downsampleChartRows(visibleRows, [...portKeys, "temperature"]),
+    [visibleRows],
+  );
+  const hasTemperature = visibleRows.some((row) => row.temperature != null);
+  const chartLegend = portKeys.map((key, index) => ({ key, color: portColors[index], dashed: false }))
+    .concat(hasTemperature ? [{ key: "Temp", color: "#7f6d52", dashed: true }] : []);
   const visibleTrendPoints = rows.filter((row) => (
     row.temperature != null || portKeys.some((key) => typeof row[key] === "number")
   )).length;
   const canShowTrend = visibleTrendPoints >= 2;
-  const showRefreshState = canShowTrend && source === "device" && transportState !== "sse";
+  const showRefreshState = canShowTrend && source === "device" && transportState !== "mqtt" && transportState !== "mqtt-http";
 
   return (
     <section className="panel chart-panel">
@@ -521,20 +658,31 @@ export function PowerChart({
       </div>
       {canShowTrend ? (
         <>
-          <div className="chart-legend" aria-label={t("chartLegend")}>
-            {chartLegend.map((item) => (
-              <span key={item.key}>
-                <i
-                  className={item.dashed ? "dashed" : ""}
-                  style={{ "--legend-color": item.color } as React.CSSProperties}
-                />
-                {item.key}
-              </span>
-            ))}
+          <div className="live-chart-toolbar">
+            <div className="live-chart-actions">
+              {showRefreshState ? (
+                <div className="live-refresh-chip" role="status">
+                  <span aria-hidden="true" />
+                  <strong>{t("refreshingLive")}</strong>
+                </div>
+              ) : null}
+              <ChartStepControl value={chartStep} onChange={setChartStep} t={t} />
+            </div>
+            <div className="chart-legend" aria-label={t("chartLegend")}>
+              {chartLegend.map((item) => (
+                <span key={item.key}>
+                  <i
+                    className={item.dashed ? "dashed" : ""}
+                    style={{ "--legend-color": item.color } as React.CSSProperties}
+                  />
+                  {item.key}
+                </span>
+              ))}
+            </div>
           </div>
           <div className="live-chart-shell">
             <ResponsiveContainer width="100%" height={300}>
-              <ComposedChart data={rows} margin={{ top: 12, right: 12, left: -18, bottom: 0 }}>
+              <ComposedChart data={renderRows} margin={{ top: 12, right: 12, left: -18, bottom: 0 }}>
                 <defs>
                   <linearGradient id="amberFill" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="0%" stopColor="#f47b20" stopOpacity={0.45} />
@@ -544,13 +692,15 @@ export function PowerChart({
                 <CartesianGrid stroke="var(--chart-grid)" vertical={false} />
                 <XAxis dataKey="time" tickLine={false} axisLine={false} tick={{ fill: "var(--chart-axis)", fontSize: 12 }} />
                 <YAxis yAxisId="power" tickLine={false} axisLine={false} tick={{ fill: "var(--chart-axis)", fontSize: 12 }} />
-                <YAxis
-                  yAxisId="temperature"
-                  orientation="right"
-                  tickLine={false}
-                  axisLine={false}
-                  tick={{ fill: "var(--amber-deep)", fontSize: 12 }}
-                />
+                {hasTemperature ? (
+                  <YAxis
+                    yAxisId="temperature"
+                    orientation="right"
+                    tickLine={false}
+                    axisLine={false}
+                    tick={{ fill: "var(--amber-deep)", fontSize: 12 }}
+                  />
+                ) : null}
                 <Tooltip
                   contentStyle={{
                     background: "var(--chart-tooltip-bg)",
@@ -573,31 +723,36 @@ export function PowerChart({
                     yAxisId="power"
                   />
                 ))}
-                <Line
-                  connectNulls
-                  dataKey="temperature"
-                  dot={false}
-                  isAnimationActive={false}
-                  name="temperature"
-                  stroke="#7f6d52"
-                  strokeDasharray="5 5"
-                  strokeWidth={2}
-                  type="monotone"
-                  yAxisId="temperature"
-                />
+                {hasTemperature ? (
+                  <Line
+                    connectNulls={false}
+                    dataKey="temperature"
+                    dot={false}
+                    isAnimationActive={false}
+                    name="temperature"
+                    stroke="#7f6d52"
+                    strokeDasharray="5 5"
+                    strokeWidth={2}
+                    type="monotone"
+                    yAxisId="temperature"
+                  />
+                ) : null}
               </ComposedChart>
             </ResponsiveContainer>
-            {showRefreshState ? (
-              <div className="history-loading-overlay live-refresh-overlay" role="status">
-                <span aria-hidden="true" />
-                <strong>{t("refreshingLive")}</strong>
-              </div>
-            ) : null}
           </div>
+          <ChartZoomControl
+            count={rows.length}
+            end={zoomRange.end}
+            endLabel={rows[zoomRange.end]?.time}
+            onChange={setZoomRange}
+            start={zoomRange.start}
+            startLabel={rows[zoomRange.start]?.time}
+            t={t}
+          />
           <div className="port-va-charts live-va-charts">
             <MultiMetricTrendChart
               colors={portColors}
-              data={rows}
+              data={visibleRows}
               keys={portKeys.map((key) => `${key}V`)}
               labels={portKeys}
               title={`${t("voltage")} (V)`}
@@ -605,7 +760,7 @@ export function PowerChart({
             />
             <MultiMetricTrendChart
               colors={portColors}
-              data={rows}
+              data={visibleRows}
               keys={portKeys.map((key) => `${key}A`)}
               labels={portKeys}
               title={`${t("current")} (A)`}

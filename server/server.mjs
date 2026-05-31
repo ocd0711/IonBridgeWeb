@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { createCollector } from "./collector.mjs";
 import { createStore } from "./db.mjs";
 import { createLive } from "./live.mjs";
+import { createMqttBridge } from "./mqtt.mjs";
 import { createRoutes } from "./routes.mjs";
 import { createTargetFetcher, normalizeTarget } from "./target-security.mjs";
 
@@ -37,6 +38,7 @@ const fetchTarget = createTargetFetcher({
 const showAppearanceSwitcher = process.env.IONBRIDGE_SHOW_APPEARANCE_SWITCHER === "true";
 const sessions = new Map();
 const loginFailures = new Map();
+const mqttBrokerSync = new Map();
 
 process.on("unhandledRejection", (error) => {
   console.warn("[ionbridge] background task failed:", error);
@@ -57,14 +59,22 @@ collector = createCollector({
   fetchJson,
   refreshConfig,
   broadcast: live.broadcast,
+  onTargetOnline: ensureDeviceMqttBroker,
+});
+const mqttBridge = createMqttBridge({
+  store,
+  refreshConfig,
+  broadcast: live.broadcast,
 });
 const routes = createRoutes({
   store,
   collector,
+  mqttBridge,
   live,
   getConfig: () => config,
   refreshConfig,
   fetchMachineInfo,
+  ensureDeviceMqttBroker,
   fetchTarget,
   defaultIntervalMs,
   retentionDays,
@@ -74,6 +84,7 @@ const routes = createRoutes({
 config = await loadConfig();
 store.pruneHistory(Date.now(), true);
 collector.startCollectors();
+mqttBridge.start();
 
 const server = createServer(async (req, res) => {
   try {
@@ -105,6 +116,14 @@ const server = createServer(async (req, res) => {
 
     if (url.pathname === "/api/history") return routes.handleHistory(url, res);
     if (url.pathname === "/api/status") return sendJson(res, routes.statusPayload());
+    if (url.pathname === "/api/mqtt") {
+      if (req.method === "GET") return sendJson(res, routes.mqttPayload());
+      if (req.method === "PUT") return routes.handleMqttConfig(req, res);
+    }
+    if (url.pathname === "/api/mqtt/stream" && req.method === "POST") return routes.handleMqttStream(req, res);
+    if (url.pathname === "/api/mqtt/ports" && req.method === "POST") return routes.handleMqttPort(req, res);
+    if (url.pathname === "/api/mqtt/control" && req.method === "POST") return routes.handleMqttControl(req, res);
+    if (url.pathname === "/api/mqtt/state" && req.method === "POST") return routes.handleMqttState(req, res);
     if (url.pathname === "/api/live") return live.handleLive(req, res, url);
     if (url.pathname.startsWith("/device-proxy")) return routes.proxyRequest(req, res, url);
     if (url.pathname.startsWith("/device")) return routes.proxyCurrentTarget(req, res, url);
@@ -129,6 +148,60 @@ async function loadConfig() {
 async function refreshConfig() {
   config = await loadConfig();
   return config;
+}
+
+async function ensureDeviceMqttBroker(targetUrl, mqttOptions = store.getMqttConnectionOptions()) {
+  const normalizedTarget = normalizeTarget(targetUrl);
+  const signature = mqttOptions.enabled && mqttOptions.brokerUrl
+    ? deviceBrokerUri(mqttOptions)
+    : "";
+  const cached = mqttBrokerSync.get(normalizedTarget);
+  const now = Date.now();
+  if (cached?.signature === signature && now - cached.ts < 10 * 60 * 1000) return;
+  const currentBroker = await getDeviceMqttBroker(normalizedTarget);
+  if (currentBroker != null && sameBrokerUri(currentBroker, signature)) {
+    mqttBrokerSync.set(normalizedTarget, { signature, ts: now });
+    return;
+  }
+  await setDeviceMqttBroker(normalizedTarget, signature);
+  mqttBrokerSync.set(normalizedTarget, { signature, ts: now });
+}
+
+async function getDeviceMqttBroker(targetUrl) {
+  const html = await fetchText(new URL("/", normalizeTarget(targetUrl)).toString(), deviceIdentityTimeoutMs);
+  const match = html.match(/window\.__CONFIG=(\{.*?\});/);
+  if (!match) return null;
+  const config = JSON.parse(match[1]);
+  return typeof config.broker === "string" ? config.broker.trim() : "";
+}
+
+async function setDeviceMqttBroker(targetUrl, brokerUri) {
+  const response = await fetchTarget(new URL("/setbrokerz", normalizeTarget(targetUrl)).toString(), {
+    method: "POST",
+    headers: brokerUri ? { "content-type": "text/plain; charset=utf-8" } : {},
+    body: brokerUri,
+  });
+  if (!response.ok) throw new Error(`device broker update failed: ${response.status}`);
+}
+
+function deviceBrokerUri({ brokerUrl, username, password }) {
+  const url = new URL(brokerUrl);
+  if (username) url.username = username;
+  if (password) url.password = password;
+  return url.toString().replace(/\/$/, "");
+}
+
+function sameBrokerUri(actual, expected) {
+  return normalizeBrokerSignature(actual) === normalizeBrokerSignature(expected);
+}
+
+function normalizeBrokerSignature(value) {
+  const broker = String(value || "").trim();
+  if (!broker) return "";
+  const url = new URL(broker);
+  url.protocol = url.protocol.toLowerCase();
+  url.hostname = url.hostname.toLowerCase();
+  return url.toString().replace(/\/$/, "");
 }
 
 async function fetchMachineInfo(target) {

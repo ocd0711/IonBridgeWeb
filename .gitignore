@@ -6,3 +6,4 @@ preview-*.png
 .DS_Store
 .codegraph/
 docs/architecture.md
+docker-compose-ocd.yml
