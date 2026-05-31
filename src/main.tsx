@@ -90,6 +90,9 @@ const NO_POWER_CONFIRM_SAMPLES = 2;
 const CUSTOM_PDO_MIN_MV = 5000;
 const CUSTOM_PDO_MAX_MV = 20000;
 const STANDARD_PDO_VOLTAGES = new Set([5000, 9000, 15000, 20000]);
+const TEMP_ALLOC_MIN_W = 15;
+const TEMP_ALLOC_A_MAX_W = 60;
+const TEMP_ALLOC_C_MAX_W = 140;
 type EditablePowerFeatureKey = Exclude<keyof MqttPowerFeatures, "limitedCurrentMode">;
 const POWER_FEATURE_KEYS: Array<keyof MqttPowerFeatures> = [
   "enableUfcs",
@@ -204,6 +207,15 @@ function defaultPortConfigs(length = 8): MqttPortConfig[] {
 
 function protocolKeysForPort(port?: PortMetrics) {
   return EDITABLE_POWER_FEATURE_KEYS.filter((key) => port?.port_type === "C" || !PD_POWER_FEATURE_KEYS.has(key));
+}
+
+function allocationPortMax(port: PortMetrics) {
+  return port.port_type === "A" ? TEMP_ALLOC_A_MAX_W : TEMP_ALLOC_C_MAX_W;
+}
+
+function sanitizedAllocationValue(value: string | undefined) {
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.max(0, Math.floor(number)) : 0;
 }
 
 function mergeProtocolFeaturesForTarget(
@@ -719,6 +731,16 @@ function MqttControl({
     pdoVoltageNumber < CUSTOM_PDO_MIN_MV ||
     pdoVoltageNumber > CUSTOM_PDO_MAX_MV ||
     STANDARD_PDO_VOLTAGES.has(pdoVoltageNumber);
+  const displayIntensityNumber = Number(displayIntensity);
+  const displayIntensityInvalid = !Number.isInteger(displayIntensityNumber) || displayIntensityNumber < 0 || displayIntensityNumber > 100;
+  const allocationTotal = visiblePorts.reduce((sum, port, index) => sum + sanitizedAllocationValue(allocation[index]), 0);
+  const allocationBudget = profile.totalPowerBudgetW;
+  const allocationInvalid = allocationTotal > allocationBudget || visiblePorts.some((port, index) => {
+    const rawValue = Number(allocation[index]);
+    if (!Number.isInteger(rawValue) || rawValue < 0) return true;
+    const value = rawValue;
+    return value !== 0 && (value < TEMP_ALLOC_MIN_W || value > allocationPortMax(port));
+  });
 
   React.useEffect(() => {
     if (isEditingConfig || busy) return;
@@ -1009,21 +1031,35 @@ function MqttControl({
 
           <section>
             <h3>{t("temporaryPower")}</h3>
+            <p className="control-help">
+              {t("temporaryPowerHint").replace("{total}", String(allocationBudget))}
+            </p>
             <div className="allocation-grid">
               {visiblePorts.map((port, index) => (
                 <label key={port.id}>
-                  <span>{portLabel(port)}</span>
+                  <span>
+                    {portLabel(port)}
+                    <small>0 / {TEMP_ALLOC_MIN_W}-{allocationPortMax(port)}W</small>
+                  </span>
+                  <div className="unit-input">
                   <input
                     min="0"
-                    max="240"
+                    max={allocationPortMax(port)}
                     onChange={(event) => setAllocation((current) => current.map((value, valueIndex) => valueIndex === index ? event.target.value : value))}
+                    step="1"
                     type="number"
                     value={allocation[index] ?? "0"}
                   />
+                    <i>W</i>
+                  </div>
                 </label>
               ))}
             </div>
-            <button disabled={controlDisabled} onClick={() => runCommand("allocation", "temporaryAllocation", { powerAllocation: allocation.map(Number) })} type="button">{t("applyAllocation")}</button>
+            <div className={`allocation-summary ${allocationInvalid ? "invalid" : ""}`}>
+              <span>{t("temporaryPowerTotal")}</span>
+              <strong>{allocationTotal} / {allocationBudget}W</strong>
+            </div>
+            <button disabled={controlDisabled || allocationInvalid} onClick={() => runCommand("allocation", "temporaryAllocation", { powerAllocation: allocation.map(Number) })} type="button">{t("applyAllocation")}</button>
           </section>
 
           <section className="protocol-section">
@@ -1065,6 +1101,7 @@ function MqttControl({
                           onChange={(event) => updatePortFeature(selectedProtocolPortId, key, event.target.checked)}
                           type="checkbox"
                         />
+                        <span className="protocol-toggle" aria-hidden="true" />
                       </label>
                     );
                   })}
@@ -1096,6 +1133,7 @@ function MqttControl({
                               onChange={(event) => updatePortFeature(selectedProtocolPortId, key, event.target.checked)}
                               type="checkbox"
                             />
+                            <span className="protocol-toggle" aria-hidden="true" />
                           </label>
                         );
                       })}
@@ -1151,20 +1189,28 @@ function MqttControl({
           <section>
             <h3>{t("customPdo")}</h3>
             <div className="control-row">
-              <select value={pdoPort} onChange={(event) => setPdoPort(event.target.value)}>
-                {visiblePorts.filter((port) => port.port_type === "C").map((port) => <option key={port.id} value={port.id}>{portLabel(port)}</option>)}
-              </select>
-              <input
-                aria-label={t("customPdoVoltage")}
-                max={CUSTOM_PDO_MAX_MV}
-                min={CUSTOM_PDO_MIN_MV}
-                onChange={(event) => setPdoVoltage(event.target.value)}
-                placeholder="11000"
-                step="100"
-                type="number"
-                value={pdoVoltage}
-              />
-              <span className="control-value">mV</span>
+              <label className="control-field">
+                <span>{t("cablePort")}</span>
+                <select value={pdoPort} onChange={(event) => setPdoPort(event.target.value)}>
+                  {visiblePorts.filter((port) => port.port_type === "C").map((port) => <option key={port.id} value={port.id}>{portLabel(port)}</option>)}
+                </select>
+              </label>
+              <label className="control-field">
+                <span>{t("customPdoVoltage")}</span>
+                <div className="unit-input">
+                  <input
+                    aria-label={t("customPdoVoltage")}
+                    max={CUSTOM_PDO_MAX_MV}
+                    min={CUSTOM_PDO_MIN_MV}
+                    onChange={(event) => setPdoVoltage(event.target.value)}
+                    placeholder="11000"
+                    step="100"
+                    type="number"
+                    value={pdoVoltage}
+                  />
+                  <i>mV</i>
+                </div>
+              </label>
               <button disabled={controlDisabled || pdoVoltageInvalid} onClick={() => runCommand("pdo", "customPdoVoltage", { port: Number(pdoPort), voltageMv: Number(pdoVoltage) })} type="button">{t("sendCommand")}</button>
             </div>
             <small className={`control-note ${pdoVoltageInvalid ? "warning" : ""}`}>{t("customPdoHelp")}</small>
@@ -1172,36 +1218,73 @@ function MqttControl({
 
           <section>
             <h3>{t("cableCompensation")}</h3>
+            <p className="control-help">{t("cableCompensationHelp")}</p>
             <div className="control-row">
-              <select value={cablePort} onChange={(event) => setCablePort(event.target.value)}>
-                {visiblePorts.map((port) => <option key={port.id} value={port.id}>{portLabel(port)}</option>)}
-              </select>
-              <select value={cableResistance} onChange={(event) => setCableResistance(event.target.value)}>
-                <option value="0">65mOhm</option>
-                <option value="1">100mOhm</option>
-              </select>
-              <select value={cableOffset} onChange={(event) => setCableOffset(event.target.value)}>
-                <option value="0">0mV</option>
-                <option value="1">100mV</option>
-                <option value="2">150mV</option>
-                <option value="3">200mV</option>
-              </select>
-              <label className="inline-check"><input checked={cableDisabled} onChange={(event) => setCableDisabled(event.target.checked)} type="checkbox" /> Disable</label>
+              <label className="control-field">
+                <span>{t("cablePort")}</span>
+                <select value={cablePort} onChange={(event) => setCablePort(event.target.value)}>
+                  {visiblePorts.map((port) => <option key={port.id} value={port.id}>{portLabel(port)}</option>)}
+                </select>
+              </label>
+              <label className="control-field">
+                <span>{t("cableResistance")}</span>
+                <select value={cableResistance} onChange={(event) => setCableResistance(event.target.value)}>
+                  <option value="0">65mΩ</option>
+                  <option value="1">100mΩ</option>
+                </select>
+              </label>
+              <label className="control-field">
+                <span>{t("cableOffset")}</span>
+                <select value={cableOffset} onChange={(event) => setCableOffset(event.target.value)}>
+                  <option value="0">0mV</option>
+                  <option value="1">100mV</option>
+                  <option value="2">150mV</option>
+                  <option value="3">200mV</option>
+                </select>
+              </label>
+              <label className="inline-check"><input checked={!cableDisabled} onChange={(event) => setCableDisabled(!event.target.checked)} type="checkbox" /> {t("cableEnabled")}</label>
               <button disabled={controlDisabled} onClick={() => runCommand("cable", "cableCompensation", { portMask: 1 << Number(cablePort), disable: cableDisabled, resistance: Number(cableResistance), voltageOffset: Number(cableOffset) })} type="button">{t("sendCommand")}</button>
             </div>
           </section>
 
           <section>
             <h3>{t("displayControl")}</h3>
+            <div className="display-control-layout">
+              <label className="brightness-control">
+                <span>
+                  <strong>{t("displayBrightness")}</strong>
+                  <em>{displayIntensityInvalid ? "--" : displayIntensity}%</em>
+                </span>
+                <input
+                  min="0"
+                  max="100"
+                  onChange={(event) => setDisplayIntensity(event.target.value)}
+                  style={{ "--brightness": `${displayIntensityInvalid ? 0 : displayIntensity}%` } as React.CSSProperties}
+                  type="range"
+                  value={displayIntensityInvalid ? 0 : displayIntensity}
+                />
+              </label>
+              <label className="brightness-input">
+                <div className="unit-input">
+                  <input
+                    max="100"
+                    min="0"
+                    onChange={(event) => setDisplayIntensity(event.target.value)}
+                    step="1"
+                    type="number"
+                    value={displayIntensity}
+                  />
+                  <i>%</i>
+                </div>
+              </label>
+            </div>
             <div className="control-row">
-              <input min="0" max="100" onChange={(event) => setDisplayIntensity(event.target.value)} type="range" value={displayIntensity} />
-              <span className="control-value">{displayIntensity}%</span>
               <select value={displayMode} onChange={(event) => setDisplayMode(event.target.value)}>
                 <option value="0">{t("displayOff")}</option>
                 {supportsManualDisplay ? <option value="1">{t("displayManual")}</option> : null}
                 <option value="2">{t("displayPowerMeter")}</option>
               </select>
-              <button disabled={controlDisabled} onClick={() => runCommand("display-intensity", "displayIntensity", { intensity: Number(displayIntensity) })} type="button">{t("applyBrightness")}</button>
+              <button disabled={controlDisabled || displayIntensityInvalid} onClick={() => runCommand("display-intensity", "displayIntensity", { intensity: Number(displayIntensity) })} type="button">{t("applyBrightness")}</button>
               <button disabled={controlDisabled} onClick={() => runCommand("display-mode", "displayMode", { mode: Number(displayMode) })} type="button">{t("applyDisplayMode")}</button>
             </div>
             {supportsDisplayAnimation ? (
@@ -1217,7 +1300,7 @@ function MqttControl({
                   <option value="1">{t("idleMeteor")}</option>
                   <option value="2">{t("idleLife")}</option>
                 </select>
-                <button disabled={controlDisabled} onClick={() => runCommand("display-setup", "displaySetup", { intensity: Number(displayIntensity), rotation: Number(displayRotation), idleAnimation: Number(idleAnimation) })} type="button">{t("applyDisplay")}</button>
+                <button disabled={controlDisabled || displayIntensityInvalid} onClick={() => runCommand("display-setup", "displaySetup", { intensity: Number(displayIntensity), rotation: Number(displayRotation), idleAnimation: Number(idleAnimation) })} type="button">{t("applyDisplay")}</button>
               </div>
             ) : (
               <small className="control-note">{t("displayAnimationUnsupported")}</small>

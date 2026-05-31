@@ -96,7 +96,7 @@ export function buildMqttControlCommand(action, params = {}) {
     }
     case MqttControlActions.TEMPORARY_ALLOCATION: {
       const allocation = arrayParam(params.powerAllocation, "powerAllocation", 8)
-        .map((value) => intRange(value, 0, 240, "powerAllocation"));
+        .map((value) => intRange(value, 0, 224, "powerAllocation"));
       return {
         command: ServiceCommand.SET_TEMPORARY_ALLOCATOR,
         payload: { setTemporaryAllocator: { powerAllocation: padAllocation(allocation) } },
