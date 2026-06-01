@@ -501,6 +501,40 @@ h1 {
   min-width: 0;
 }
 
+.mqtt-control-standalone {
+  margin-top: 2px;
+}
+
+.mqtt-control-standalone .mqtt-control-console {
+  overflow: hidden;
+  border-color: rgba(243, 109, 22, 0.18);
+  background:
+    linear-gradient(180deg, rgba(255, 253, 250, 0.72), rgba(250, 245, 237, 0.48));
+  box-shadow: 0 12px 30px rgba(68, 52, 38, 0.08);
+}
+
+.mqtt-control-standalone .mqtt-control-console summary {
+  min-height: 58px;
+  cursor: default;
+}
+
+.mqtt-control-standalone .mqtt-control-console summary::after {
+  display: inline-flex;
+  min-width: 72px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(243, 109, 22, 0.2);
+  border-radius: 999px;
+  background: rgba(255, 157, 46, 0.1);
+  padding: 5px 10px;
+  color: var(--amber-strong);
+  font-size: 10px;
+  font-weight: 950;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  content: "MQTT";
+}
+
 .mqtt-config-form {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));

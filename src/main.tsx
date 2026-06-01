@@ -442,6 +442,7 @@ function Header({
             profile={profile}
             status={mqttStatus}
             disabled={connectionActionPending}
+            mode="settings"
             ports={metrics.ports}
             onApply={onMqttApply}
             onControl={onMqttControl}
@@ -670,6 +671,7 @@ function MqttControl({
   status,
   ports,
   disabled = false,
+  mode = "full",
   onApply,
   onControl,
   onQueryState,
@@ -681,6 +683,7 @@ function MqttControl({
   status?: MqttStatus;
   ports: PortMetrics[];
   disabled?: boolean;
+  mode?: "full" | "settings" | "control";
   onApply: (config: { enabled: boolean; brokerUrl: string; username: string; password?: string }) => void | Promise<void>;
   onControl: (action: MqttControlAction, params?: Record<string, unknown>) => void | Promise<void>;
   onQueryState: (ports: number[]) => Promise<MqttControlStateResult>;
@@ -699,7 +702,7 @@ function MqttControl({
   const [syncedControlState, setSyncedControlState] = React.useState<MqttControlState>({});
   const [error, setError] = React.useState("");
   const [isEditingConfig, setIsEditingConfig] = React.useState(false);
-  const [controlOpen, setControlOpen] = React.useState(false);
+  const [controlOpen, setControlOpen] = React.useState(mode === "control");
   const [strategy, setStrategy] = React.useState("6");
   const [temperatureMode, setTemperatureMode] = React.useState("0");
   const [allocation, setAllocation] = React.useState<string[]>(["0", "0", "0", "0", "0"]);
@@ -718,6 +721,9 @@ function MqttControl({
   const canControl = Boolean(activeDeviceKey && config?.enabled && status?.connected);
   const controlBusy = commandBusy !== "" || syncingState;
   const controlDisabled = disabled || controlBusy || !canControl;
+  const showSettings = mode !== "control";
+  const showControl = mode !== "settings";
+  const effectiveControlOpen = mode === "control" || controlOpen;
   const visiblePorts = ports.slice().sort((a, b) => a.id - b.id);
   const supportsDisplayAnimation = profile.displayKind === "amber";
   const supportsManualDisplay = profile.displayKind === "amber";
@@ -770,9 +776,9 @@ function MqttControl({
   }, [visiblePorts.length]);
 
   React.useEffect(() => {
-    if (!controlOpen || !canControl || syncingState) return;
+    if (!effectiveControlOpen || !canControl || syncingState) return;
     void syncControlState();
-  }, [controlOpen, canControl, activeDeviceKey, visiblePorts.length]);
+  }, [effectiveControlOpen, canControl, activeDeviceKey, visiblePorts.length]);
 
   React.useEffect(() => {
     applyCableState(syncedControlState, cablePort);
@@ -922,7 +928,8 @@ function MqttControl({
   }
 
   return (
-    <div className="mqtt-control">
+    <div className={`mqtt-control ${mode === "control" ? "mqtt-control-standalone" : ""}`}>
+      {showSettings ? (
       <form className="mqtt-config-form" onSubmit={submit}>
         <div className="mqtt-control-head">
           <div>
@@ -981,9 +988,19 @@ function MqttControl({
           </button>
         </div>
       </form>
+      ) : null}
 
-      <details className="mqtt-control-console" open={controlOpen} onToggle={(event) => setControlOpen(event.currentTarget.open)}>
-        <summary>
+      {showControl ? (
+      <details
+        className="mqtt-control-console"
+        open={effectiveControlOpen}
+        onToggle={(event) => {
+          if (mode !== "control") setControlOpen(event.currentTarget.open);
+        }}
+      >
+        <summary onClick={(event) => {
+          if (mode === "control") event.preventDefault();
+        }}>
           <span>{t("mqttControl")}</span>
           <small>
             {syncingState
@@ -1308,6 +1325,7 @@ function MqttControl({
           </section>
         </div>
       </details>
+      ) : null}
       {error ? <strong className="target-error">{error}</strong> : null}
     </div>
   );
@@ -1963,6 +1981,21 @@ function App() {
             />
           ))}
         </section>
+        {mqttConfig?.enabled ? (
+          <MqttControl
+            activeDeviceKey={activeDeviceKey}
+            config={mqttConfig}
+            profile={activeProfile}
+            status={mqttStatus}
+            disabled={connectionActionPending}
+            mode="control"
+            ports={metrics.ports}
+            onApply={handleMqttSettingsApply}
+            onControl={handleMqttControl}
+            onQueryState={handleMqttQueryState}
+            onStream={handleMqttStream}
+          />
+        ) : null}
         <section className="dashboard-grid">
           <PowerChart history={history} source={source} transportState={transportState} />
           <RuntimePanel metrics={metrics} heap={heap} />
