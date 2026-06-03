@@ -7,3 +7,5 @@ preview-*.png
 .codegraph/
 docs/architecture.md
 docker-compose-ocd.yml
+emqx-*/
+ionbridge-data/

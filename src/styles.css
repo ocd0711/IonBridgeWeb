@@ -507,10 +507,12 @@ h1 {
 
 .mqtt-control-standalone .mqtt-control-console {
   overflow: hidden;
-  border-color: rgba(243, 109, 22, 0.18);
+  border-color: rgba(40, 35, 31, 0.1);
   background:
-    linear-gradient(180deg, rgba(255, 253, 250, 0.72), rgba(250, 245, 237, 0.48));
-  box-shadow: 0 12px 30px rgba(68, 52, 38, 0.08);
+    linear-gradient(180deg, rgba(255, 253, 250, 0.78), rgba(247, 242, 234, 0.62));
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.72) inset,
+    0 10px 26px rgba(68, 52, 38, 0.06);
 }
 
 .mqtt-control-standalone .mqtt-control-console summary {
@@ -580,7 +582,7 @@ h1 {
   height: 40px;
   border: 1px solid var(--hairline);
   border-radius: 8px;
-  background: rgba(255, 253, 250, 0.75);
+  background: rgba(255, 253, 250, 0.82);
   padding: 0 10px;
   color: var(--ink);
   font-family: "SF Mono", "Cascadia Code", monospace;
@@ -628,7 +630,7 @@ h1 {
 .mqtt-control-console {
   border: 1px solid rgba(40, 35, 31, 0.08);
   border-radius: 8px;
-  background: rgba(255, 253, 250, 0.42);
+  background: rgba(255, 253, 250, 0.48);
 }
 
 .mqtt-control-console summary {
@@ -696,23 +698,29 @@ h1 {
 .mqtt-control-groups {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
+  gap: 10px;
   border-top: 1px solid var(--hairline);
-  padding: 8px;
+  padding: 10px;
 }
 
 .mqtt-control-groups section {
   display: grid;
-  gap: 8px;
-  border: 1px solid rgba(40, 35, 31, 0.08);
+  gap: 10px;
+  align-content: start;
+  border: 1px solid rgba(40, 35, 31, 0.09);
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.34);
-  padding: 10px;
+  background:
+    linear-gradient(180deg, rgba(255, 253, 250, 0.7), rgba(246, 241, 232, 0.42));
+  padding: 12px;
+}
+
+.mqtt-control-groups .allocation-section {
+  grid-column: 1 / -1;
 }
 
 .mqtt-control-groups h3 {
   margin: 0;
-  color: var(--muted);
+  color: var(--ink);
   font-size: 12px;
   font-weight: 900;
   text-transform: uppercase;
@@ -722,12 +730,13 @@ h1 {
 .control-button-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 8px;
+  align-items: end;
 }
 
 .control-row > *,
 .control-button-row > * {
-  flex: 1 1 92px;
+  flex: 1 1 112px;
 }
 
 .control-row > .control-field {
@@ -736,20 +745,43 @@ h1 {
 
 .control-row button,
 .control-button-row button,
+.display-control-actions button,
 .mqtt-control-groups > section > button {
-  min-height: 36px;
+  min-height: 40px;
   border: 1px solid rgba(243, 109, 22, 0.22);
   border-radius: 8px;
-  background: rgba(255, 157, 46, 0.1);
+  background:
+    linear-gradient(180deg, rgba(255, 157, 46, 0.1), rgba(244, 123, 32, 0.06));
   padding: 0 10px;
   color: var(--amber-strong);
   font-size: 11px;
   font-weight: 900;
   cursor: pointer;
+  transition:
+    background 160ms ease,
+    border-color 160ms ease,
+    transform 160ms ease;
+}
+
+.control-row button:hover:not(:disabled),
+.control-button-row button:hover:not(:disabled),
+.display-control-actions button:hover:not(:disabled),
+.mqtt-control-groups > section > button:hover:not(:disabled) {
+  border-color: rgba(243, 109, 22, 0.38);
+  background:
+    linear-gradient(180deg, rgba(255, 157, 46, 0.16), rgba(244, 123, 32, 0.1));
+}
+
+.control-row button:active:not(:disabled),
+.control-button-row button:active:not(:disabled),
+.display-control-actions button:active:not(:disabled),
+.mqtt-control-groups > section > button:active:not(:disabled) {
+  transform: translateY(1px);
 }
 
 .control-row button:disabled,
 .control-button-row button:disabled,
+.display-control-actions button:disabled,
 .mqtt-control-groups > section > button:disabled {
   cursor: not-allowed;
   opacity: 0.52;
@@ -770,19 +802,14 @@ h1 {
 
 .display-control-layout {
   display: grid;
-  grid-template-columns: minmax(180px, 1fr) 96px;
-  gap: 8px;
+  grid-template-columns: minmax(180px, 1fr) minmax(112px, 148px);
+  gap: 12px;
   align-items: end;
-  border: 1px solid rgba(145, 122, 84, 0.16);
-  border-radius: 10px;
-  background:
-    linear-gradient(180deg, rgba(255, 253, 250, 0.62), rgba(250, 245, 237, 0.36));
-  padding: 10px;
 }
 
 .brightness-control {
   display: grid;
-  gap: 9px;
+  gap: 11px;
   min-width: 0;
 }
 
@@ -800,11 +827,10 @@ h1 {
   font-size: 11px;
 }
 
-.brightness-control em {
-  color: var(--amber-strong);
+.brightness-control b {
+  color: var(--ink);
   font-family: "SF Mono", "Cascadia Code", monospace;
-  font-size: 12px;
-  font-style: normal;
+  font-size: 13px;
   font-weight: 950;
 }
 
@@ -862,9 +888,29 @@ h1 {
     0 0 16px rgba(244, 123, 32, 0.22);
 }
 
-.brightness-input {
-  display: block;
-  min-width: 0;
+.display-control-actions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(136px, 1fr));
+  gap: 8px;
+  align-items: end;
+}
+
+.display-control-actions button {
+  min-height: 40px;
+}
+
+.display-control-note {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 760;
+  line-height: 1.55;
+}
+
+.display-control-actions select:disabled,
+.display-control-layout select:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
 }
 
 .allocation-grid,
@@ -879,11 +925,47 @@ h1 {
 .inline-check {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   min-width: 0;
   color: var(--muted);
   font-size: 11px;
   font-weight: 900;
+}
+
+.inline-check {
+  min-height: 40px;
+  justify-content: flex-start;
+  border: 1px solid rgba(40, 35, 31, 0.08);
+  border-radius: 8px;
+  background: rgba(255, 253, 250, 0.68);
+  padding: 0 12px;
+}
+
+.inline-check input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.inline-check strong {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.inline-check input:checked + .protocol-toggle {
+  border-color: rgba(244, 123, 32, 0.38);
+  background: rgba(244, 123, 32, 0.72);
+  box-shadow: 0 0 18px rgba(244, 123, 32, 0.14);
+}
+
+.inline-check input:checked + .protocol-toggle::after {
+  background: #fffdfa;
+  transform: translateX(18px);
 }
 
 .allocation-grid label {
@@ -912,7 +994,17 @@ h1 {
 .unit-input input,
 .allocation-grid input {
   width: 100%;
-  padding-right: 34px;
+  padding-right: 42px;
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+.unit-input input::-webkit-outer-spin-button,
+.unit-input input::-webkit-inner-spin-button,
+.allocation-grid input::-webkit-outer-spin-button,
+.allocation-grid input::-webkit-inner-spin-button {
+  margin: 0;
+  appearance: none;
 }
 
 .unit-input i {
@@ -1012,7 +1104,7 @@ h1 {
 
 .protocol-list {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: 8px;
 }
 
@@ -1024,8 +1116,8 @@ h1 {
   min-width: 0;
   border: 1px solid rgba(40, 35, 31, 0.08);
   border-radius: 8px;
-  background: rgba(255, 253, 250, 0.68);
-  padding: 10px 12px;
+  background: rgba(255, 253, 250, 0.72);
+  padding: 9px 11px;
   color: var(--ink);
 }
 
@@ -3757,6 +3849,10 @@ h1 {
     flex-wrap: wrap;
   }
 
+  .display-control-layout {
+    grid-template-columns: 1fr;
+  }
+
   .allocation-grid,
   .compat-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -4054,11 +4150,46 @@ h1 {
   .mqtt-control-console,
   .mqtt-control-groups section,
   .mqtt-control-groups .protocol-group,
-  .display-control-layout,
   .control-status-card,
   .protocol-card {
-    background: rgba(30, 26, 22, 0.72);
+    background:
+      linear-gradient(180deg, rgba(36, 31, 26, 0.82), rgba(28, 24, 21, 0.74));
     border-color: rgba(255, 255, 255, 0.08);
+  }
+
+  .mqtt-control-standalone .mqtt-control-console {
+    border-color: rgba(255, 255, 255, 0.1);
+    background: rgba(36, 31, 26, 0.92);
+    box-shadow:
+      0 1px 0 rgba(255, 255, 255, 0.05) inset,
+      0 18px 42px rgba(0, 0, 0, 0.26);
+  }
+
+  .mqtt-control-standalone .mqtt-control-console summary::after {
+    border-color: rgba(255, 118, 27, 0.36);
+    background: rgba(255, 118, 27, 0.14);
+    color: #ffb879;
+  }
+
+  .mqtt-sync-bar,
+  .mqtt-control-groups {
+    border-color: rgba(255, 255, 255, 0.08);
+    background: rgba(36, 31, 26, 0.92);
+  }
+
+  .unit-input i,
+  .allocation-grid small,
+  .protocol-card.fixed span {
+    color: rgba(247, 239, 228, 0.56);
+  }
+
+  .inline-check {
+    background: rgba(26, 23, 20, 0.88);
+    border-color: rgba(255, 255, 255, 0.09);
+  }
+
+  .inline-check strong {
+    color: var(--muted);
   }
 
   .protocol-group-heading h4 {
@@ -4073,10 +4204,12 @@ h1 {
   .mqtt-sync-bar button,
   .control-row button,
   .control-button-row button,
+  .display-control-actions button,
   .mqtt-control-groups > section > button,
   .port-mqtt-action {
     border-color: rgba(255, 118, 27, 0.34);
-    background: rgba(255, 118, 27, 0.14);
+    background:
+      linear-gradient(180deg, rgba(255, 118, 27, 0.16), rgba(255, 118, 27, 0.08));
     color: #ffd3a3;
   }
 

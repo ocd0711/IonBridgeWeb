@@ -27,6 +27,9 @@ export function createMqttBridge({ store, refreshConfig, broadcast }) {
   };
   let requestId = 1;
   const pendingRequests = new Map();
+  const lastTelemetryRequestAt = new Map();
+  const lastPortSnapshotAt = new Map();
+  let telemetryKickTimer = null;
 
   function start() {
     reconnect();
@@ -34,16 +37,17 @@ export function createMqttBridge({ store, refreshConfig, broadcast }) {
 
   function reconnect() {
     const config = store.getMqttConnectionOptions();
+    const shouldConnect = Boolean(config.brokerUrl);
     closeClient();
     connection = {
-      enabled: config.enabled,
+      enabled: shouldConnect,
       configured: config.configured,
       brokerUrl: config.brokerUrl,
       connected: false,
       lastError: null,
       lastMessageAt: connection.lastMessageAt,
     };
-    if (!config.enabled || !config.brokerUrl) return;
+    if (!shouldConnect) return;
 
     client = mqtt.connect(config.brokerUrl, {
       username: config.username || undefined,
@@ -56,11 +60,8 @@ export function createMqttBridge({ store, refreshConfig, broadcast }) {
     client.on("connect", () => {
       connection = { ...connection, connected: true, lastError: null };
       client?.subscribe(["device/+/telemetry/+", "device/+/enduser/response/+"], { qos: 0 });
-      for (const target of store.listTargets()) {
-        if (target.deviceKey) {
-          requestInitialTelemetry(target.deviceKey);
-        }
-      }
+      requestTelemetryForSavedTargets({ includeDeviceInfo: true, force: true });
+      startTelemetryKickTimer();
     });
     client.on("message", (topic, payload) => {
       connection = { ...connection, lastError: null, lastMessageAt: Date.now() };
@@ -72,10 +73,12 @@ export function createMqttBridge({ store, refreshConfig, broadcast }) {
     client.on("close", () => {
       connection = { ...connection, connected: false };
       rejectPending("MQTT broker disconnected");
+      stopTelemetryKickTimer();
     });
   }
 
   function closeClient() {
+    stopTelemetryKickTimer();
     if (!client) return;
     rejectPending("MQTT broker disconnected");
     client.removeAllListeners();
@@ -189,9 +192,45 @@ export function createMqttBridge({ store, refreshConfig, broadcast }) {
     }
   }
 
-  function requestInitialTelemetry(deviceKey) {
-    void publishCommand(deviceKey, ServiceCommand.GET_DEVICE_INFO, { getDeviceInfo: {} }).catch(updateBackgroundError);
-    void publishCommand(deviceKey, ServiceCommand.START_TELEMETRY_STREAM, { startTelemetryStream: {} }).catch(updateBackgroundError);
+  function requestInitialTelemetry(deviceKey, options = {}) {
+    const normalizedDeviceKey = String(deviceKey ?? "").trim();
+    if (!normalizedDeviceKey) return;
+    const now = Date.now();
+    const minIntervalMs = options.force ? 0 : 10000;
+    if (now - (lastTelemetryRequestAt.get(normalizedDeviceKey) ?? 0) < minIntervalMs) return;
+    lastTelemetryRequestAt.set(normalizedDeviceKey, now);
+    if (options.includeDeviceInfo) {
+      void publishCommand(normalizedDeviceKey, ServiceCommand.GET_DEVICE_INFO, { getDeviceInfo: {} }).catch(updateBackgroundError);
+    }
+    void publishCommand(normalizedDeviceKey, ServiceCommand.START_TELEMETRY_STREAM, { startTelemetryStream: {} }).catch(updateBackgroundError);
+  }
+
+  function requestTelemetryForSavedTargets(options = {}) {
+    for (const target of store.listTargets()) {
+      if (!target.deviceKey) continue;
+      requestInitialTelemetry(target.deviceKey, options);
+    }
+  }
+
+  function startTelemetryKickTimer() {
+    stopTelemetryKickTimer();
+    telemetryKickTimer = setInterval(() => {
+      if (!client?.connected) return;
+      const now = Date.now();
+      for (const target of store.listTargets()) {
+        const deviceKey = String(target.deviceKey ?? "").trim();
+        if (!deviceKey) continue;
+        const lastPortsAt = lastPortSnapshotAt.get(deviceKey) ?? 0;
+        if (lastPortsAt && now - lastPortsAt < 10000) continue;
+        requestInitialTelemetry(deviceKey);
+      }
+    }, 5000);
+  }
+
+  function stopTelemetryKickTimer() {
+    if (!telemetryKickTimer) return;
+    clearInterval(telemetryKickTimer);
+    telemetryKickTimer = null;
   }
 
   function handleMessage(topic, payload) {
@@ -224,6 +263,7 @@ export function createMqttBridge({ store, refreshConfig, broadcast }) {
     }
     if (commandId === ServiceCommand.STREAM_PORT_STATUS && response.streamPortStatus) {
       state.ports = portsFromStream(response.streamPortStatus);
+      lastPortSnapshotAt.set(deviceKey, Date.now());
       persistPorts(deviceKey, state.ports);
       publishSnapshot(deviceKey);
       return;

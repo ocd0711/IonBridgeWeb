@@ -9,6 +9,8 @@ import { amps, portLabel, sampleRuntimeState, volts, watts, type PortRuntimeStat
 import type { DashboardData, LiveTransportState } from "../hooks/useDashboardData";
 import { useI18n, type TranslationKey } from "../i18n";
 import type { Metrics, PortHistory, PortMetrics } from "../types";
+const TEMPERATURE_CHART_COLOR = "#e04b2f";
+
 function samplePower(sample: { voltage: number; current: number }) {
   return (sample.voltage * sample.current) / 1_000_000;
 }
@@ -24,6 +26,10 @@ function maxValidTemperature(values: Array<number | null | undefined>) {
 
 function formatTemperatureTooltip(value: unknown) {
   return typeof value === "number" && value > 0 ? `${value.toFixed(0)}C` : "N/A";
+}
+
+function formatTemperatureAxis(value: unknown) {
+  return typeof value === "number" && value > 0 ? `${value.toFixed(0)}C` : "0";
 }
 
 function formatPowerTooltip(value: unknown) {
@@ -353,7 +359,8 @@ export function LongHistoryPanel({
                   orientation="right"
                   tickLine={false}
                   axisLine={false}
-                  tick={{ fill: "var(--amber-deep)", fontSize: 12 }}
+                  tick={{ fill: TEMPERATURE_CHART_COLOR, fontSize: 12 }}
+                  tickFormatter={formatTemperatureAxis}
                 />
                 <Tooltip content={<ServerHistoryTooltip />} />
                 <Area
@@ -371,9 +378,9 @@ export function LongHistoryPanel({
                   dot={false}
                   isAnimationActive={false}
                   name="temperature"
-                  stroke="#7f6d52"
+                  stroke={TEMPERATURE_CHART_COLOR}
                   strokeDasharray="5 5"
-                  strokeWidth={2}
+                  strokeWidth={2.4}
                   type="monotone"
                   yAxisId="temperature"
                 />
@@ -638,8 +645,8 @@ export function PowerChart({
     [visibleRows],
   );
   const hasTemperature = visibleRows.some((row) => row.temperature != null);
-  const chartLegend = portKeys.map((key, index) => ({ key, color: portColors[index], dashed: false }))
-    .concat(hasTemperature ? [{ key: "Temp", color: "#7f6d52", dashed: true }] : []);
+  const chartLegend = portKeys.map((key, index) => ({ key, label: key, color: portColors[index], dashed: false }))
+    .concat(hasTemperature ? [{ key: "temperature", label: t("thermalPeak"), color: TEMPERATURE_CHART_COLOR, dashed: true }] : []);
   const visibleTrendPoints = rows.filter((row) => (
     row.temperature != null || portKeys.some((key) => typeof row[key] === "number")
   )).length;
@@ -675,14 +682,14 @@ export function PowerChart({
                     className={item.dashed ? "dashed" : ""}
                     style={{ "--legend-color": item.color } as React.CSSProperties}
                   />
-                  {item.key}
+                  {item.label}
                 </span>
               ))}
             </div>
           </div>
           <div className="live-chart-shell">
             <ResponsiveContainer width="100%" height={300}>
-              <ComposedChart data={renderRows} margin={{ top: 12, right: 12, left: -18, bottom: 0 }}>
+              <ComposedChart data={renderRows} margin={{ top: 12, right: 30, left: -18, bottom: 0 }}>
                 <defs>
                   <linearGradient id="amberFill" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="0%" stopColor="#f47b20" stopOpacity={0.45} />
@@ -698,18 +705,11 @@ export function PowerChart({
                     orientation="right"
                     tickLine={false}
                     axisLine={false}
-                    tick={{ fill: "var(--amber-deep)", fontSize: 12 }}
+                    tick={{ fill: TEMPERATURE_CHART_COLOR, fontSize: 12 }}
+                    tickFormatter={formatTemperatureAxis}
                   />
                 ) : null}
-                <Tooltip
-                  contentStyle={{
-                    background: "var(--chart-tooltip-bg)",
-                    border: "1px solid var(--chart-tooltip-border)",
-                    borderRadius: 8,
-                    color: "var(--chart-tooltip-ink)",
-                  }}
-                  formatter={(value, name) => name === "temperature" ? formatTemperatureTooltip(value) : `${Number(value).toFixed(1)}W`}
-                />
+                <Tooltip content={<LivePowerTooltip portKeys={portKeys} t={t} />} />
                 {portKeys.map((key, index) => (
                   <Area
                     key={key}
@@ -729,10 +729,10 @@ export function PowerChart({
                     dataKey="temperature"
                     dot={false}
                     isAnimationActive={false}
-                    name="temperature"
-                    stroke="#7f6d52"
+                    name={t("thermalPeak")}
+                    stroke={TEMPERATURE_CHART_COLOR}
                     strokeDasharray="5 5"
-                    strokeWidth={2}
+                    strokeWidth={2.4}
                     type="monotone"
                     yAxisId="temperature"
                   />
@@ -775,5 +775,32 @@ export function PowerChart({
         </div>
       )}
     </section>
+  );
+}
+
+function LivePowerTooltip({
+  active,
+  label,
+  payload,
+  portKeys,
+  t,
+}: {
+  active?: boolean;
+  label?: string;
+  payload?: Array<{ dataKey?: string | number; payload?: LiveChartRow; value?: unknown }>;
+  portKeys: string[];
+  t: (key: TranslationKey) => string;
+}) {
+  if (!active || !payload?.length) return null;
+  const row = payload[0]?.payload;
+  if (!row) return null;
+  return (
+    <div className="history-tooltip">
+      <strong>{label ?? row.time}</strong>
+      {portKeys.map((key) => (
+        <span key={key}>{key} · {formatPowerTooltip(row[key])}</span>
+      ))}
+      <span>{t("thermalPeak")} · {formatTemperatureTooltip(row.temperature)}</span>
+    </div>
   );
 }

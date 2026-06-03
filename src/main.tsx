@@ -93,6 +93,16 @@ const STANDARD_PDO_VOLTAGES = new Set([5000, 9000, 15000, 20000]);
 const TEMP_ALLOC_MIN_W = 15;
 const TEMP_ALLOC_A_MAX_W = 60;
 const TEMP_ALLOC_C_MAX_W = 140;
+const CHARGING_STRATEGY_OPTIONS: Array<{
+  value: string;
+  labelKey: TranslationKey;
+  helpKey: TranslationKey;
+}> = [
+  { value: "1", labelKey: "strategySlow", helpKey: "strategySlowHelp" },
+  { value: "6", labelKey: "strategyCompatible", helpKey: "strategyCompatibleHelp" },
+  { value: "7", labelKey: "strategyPerformance", helpKey: "strategyPerformanceHelp" },
+  { value: "8", labelKey: "strategyUltraSingle", helpKey: "strategyUltraSingleHelp" },
+];
 type EditablePowerFeatureKey = Exclude<keyof MqttPowerFeatures, "limitedCurrentMode">;
 const POWER_FEATURE_KEYS: Array<keyof MqttPowerFeatures> = [
   "enableUfcs",
@@ -357,11 +367,11 @@ function Header({
     const base = transportLabel(language, transportState);
     const isHttpMode = transportState === "http" || transportState === "fallback" || transportState === "connecting" || transportState === "reconnecting";
     if (!isHttpMode) return base;
-    if (!mqttConfig?.enabled) return `${base} · ${t("mqttNotConfigured")}`;
+    if (!mqttConfig?.configured) return `${base} · ${t("mqttNotConfigured")}`;
     if (mqttStatus?.connected && !mqttStatus.lastMessageAt) return `${base} · ${t("mqttWaitingTelemetry")}`;
     if (mqttStatus?.connected && mqttStatus.lastMessageAt) return `${base} · ${t("mqttNoPortTelemetry")}`;
     return base;
-  }, [language, mqttConfig?.enabled, mqttStatus?.connected, mqttStatus?.lastMessageAt, t, transportState]);
+  }, [language, mqttConfig?.configured, mqttStatus?.connected, mqttStatus?.lastMessageAt, t, transportState]);
   const frontendText = frontendTransportLabel(language, frontendTransportState);
 
   return (
@@ -703,7 +713,7 @@ function MqttControl({
   const [error, setError] = React.useState("");
   const [isEditingConfig, setIsEditingConfig] = React.useState(false);
   const [controlOpen, setControlOpen] = React.useState(mode === "control");
-  const [strategy, setStrategy] = React.useState("6");
+  const [strategy, setStrategy] = React.useState("1");
   const [temperatureMode, setTemperatureMode] = React.useState("0");
   const [allocation, setAllocation] = React.useState<string[]>(["0", "0", "0", "0", "0"]);
   const [protocolPort, setProtocolPort] = React.useState("0");
@@ -718,15 +728,16 @@ function MqttControl({
   const [displayMode, setDisplayMode] = React.useState("2");
   const [displayRotation, setDisplayRotation] = React.useState("0");
   const [idleAnimation, setIdleAnimation] = React.useState("0");
-  const canControl = Boolean(activeDeviceKey && config?.enabled && status?.connected);
+  const canControl = Boolean(activeDeviceKey && config?.configured && status?.connected);
   const controlBusy = commandBusy !== "" || syncingState;
   const controlDisabled = disabled || controlBusy || !canControl;
   const showSettings = mode !== "control";
   const showControl = mode !== "settings";
   const effectiveControlOpen = mode === "control" || controlOpen;
   const visiblePorts = ports.slice().sort((a, b) => a.id - b.id);
-  const supportsDisplayAnimation = profile.displayKind === "amber";
-  const supportsManualDisplay = profile.displayKind === "amber";
+  const supportsDisplayAnimation = profile.family === "CP02s";
+  const supportsDisplayRotation = false;
+  const supportsManualDisplay = false;
   const selectedProtocolPortId = Number(protocolPort);
   const selectedProtocolPort = visiblePorts.find((port) => port.id === selectedProtocolPortId);
   const visibleProtocolKeys = protocolKeysForPort(selectedProtocolPort);
@@ -747,6 +758,7 @@ function MqttControl({
     const value = rawValue;
     return value !== 0 && (value < TEMP_ALLOC_MIN_W || value > allocationPortMax(port));
   });
+  const selectedStrategyOption = CHARGING_STRATEGY_OPTIONS.find((option) => option.value === strategy) ?? CHARGING_STRATEGY_OPTIONS[0];
 
   React.useEffect(() => {
     if (isEditingConfig || busy) return;
@@ -840,6 +852,33 @@ function MqttControl({
     }
   }
 
+  async function applyDisplayControl() {
+    if (controlDisabled || displayIntensityInvalid) return;
+    const mode = Number(displayMode);
+    const intensity = Number(displayIntensity);
+    setCommandBusy("display");
+    setError("");
+    try {
+      if (mode === 0) {
+        await onControl("displayMode", { mode: 0 });
+        return;
+      }
+      await onControl("displayIntensity", { intensity });
+      await onControl("displayMode", { mode: 2 });
+      if (supportsDisplayAnimation) {
+        await onControl("displaySetup", {
+          intensity,
+          rotation: 0,
+          idleAnimation: Number(idleAnimation),
+        });
+      }
+    } catch {
+      setError(t("mqttCommandFailed"));
+    } finally {
+      setCommandBusy("");
+    }
+  }
+
   async function syncControlState() {
     if (!canControl || syncingState) return;
     setSyncingState(true);
@@ -915,7 +954,7 @@ function MqttControl({
   }
 
   async function runStream(enabled: boolean) {
-    if (disabled || commandBusy || !activeDeviceKey || !config?.enabled || !status?.connected) return;
+    if (disabled || commandBusy || !activeDeviceKey || !config?.configured || !status?.connected) return;
     setCommandBusy("stream");
     setError("");
     try {
@@ -980,10 +1019,10 @@ function MqttControl({
         <div className="mqtt-actions">
           <button disabled={busy || disabled} type="submit">{busy ? t("validatingDevice") : t("mqttSave")}</button>
           <button disabled={busy || disabled} onClick={resetMqttConfig} type="button">{t("mqttResetDefault")}</button>
-          <button disabled={disabled || commandBusy !== "" || !activeDeviceKey || !config?.enabled || !status?.connected} onClick={() => runStream(true)} type="button">
+          <button disabled={disabled || commandBusy !== "" || !activeDeviceKey || !config?.configured || !status?.connected} onClick={() => runStream(true)} type="button">
             {t("mqttStartStream")}
           </button>
-          <button disabled={disabled || commandBusy !== "" || !activeDeviceKey || !config?.enabled || !status?.connected} onClick={() => runStream(false)} type="button">
+          <button disabled={disabled || commandBusy !== "" || !activeDeviceKey || !config?.configured || !status?.connected} onClick={() => runStream(false)} type="button">
             {t("mqttStopStream")}
           </button>
         </div>
@@ -1030,13 +1069,13 @@ function MqttControl({
             <h3>{t("chargingPolicy")}</h3>
             <div className="control-row">
               <select value={strategy} onChange={(event) => setStrategy(event.target.value)}>
-                <option value="6">{t("strategyCompatible")}</option>
-                <option value="1">{t("strategySlow")}</option>
-                <option value="7">{t("strategyPerformance")}</option>
-                <option value="8">{t("strategyUltraSingle")}</option>
+                {CHARGING_STRATEGY_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>{t(option.labelKey)}</option>
+                ))}
               </select>
               <button disabled={controlDisabled} onClick={() => runCommand("strategy", "chargingStrategy", { strategy: Number(strategy) })} type="button">{t("sendCommand")}</button>
             </div>
+            <small className="control-note">{t(selectedStrategyOption.helpKey)}</small>
             <div className="control-row">
               <select value={temperatureMode} onChange={(event) => setTemperatureMode(event.target.value)}>
                 <option value="0">{t("temperaturePower")}</option>
@@ -1046,7 +1085,7 @@ function MqttControl({
             </div>
           </section>
 
-          <section>
+          <section className="allocation-section">
             <h3>{t("temporaryPower")}</h3>
             <p className="control-help">
               {t("temporaryPowerHint").replace("{total}", String(allocationBudget))}
@@ -1259,7 +1298,11 @@ function MqttControl({
                   <option value="3">200mV</option>
                 </select>
               </label>
-              <label className="inline-check"><input checked={!cableDisabled} onChange={(event) => setCableDisabled(!event.target.checked)} type="checkbox" /> {t("cableEnabled")}</label>
+              <label className="inline-check">
+                <input checked={!cableDisabled} onChange={(event) => setCableDisabled(!event.target.checked)} type="checkbox" />
+                <span className="protocol-toggle" aria-hidden="true" />
+                <strong>{t("cableEnabled")}</strong>
+              </label>
               <button disabled={controlDisabled} onClick={() => runCommand("cable", "cableCompensation", { portMask: 1 << Number(cablePort), disable: cableDisabled, resistance: Number(cableResistance), voltageOffset: Number(cableOffset) })} type="button">{t("sendCommand")}</button>
             </div>
           </section>
@@ -1270,7 +1313,7 @@ function MqttControl({
               <label className="brightness-control">
                 <span>
                   <strong>{t("displayBrightness")}</strong>
-                  <em>{displayIntensityInvalid ? "--" : displayIntensity}%</em>
+                  <b>{displayIntensityInvalid ? "--" : displayIntensity}%</b>
                 </span>
                 <input
                   min="0"
@@ -1281,47 +1324,52 @@ function MqttControl({
                   value={displayIntensityInvalid ? 0 : displayIntensity}
                 />
               </label>
-              <label className="brightness-input">
-                <div className="unit-input">
-                  <input
-                    max="100"
-                    min="0"
-                    onChange={(event) => setDisplayIntensity(event.target.value)}
-                    step="1"
-                    type="number"
-                    value={displayIntensity}
-                  />
-                  <i>%</i>
-                </div>
+              <label className="control-field">
+                <span>{t("displayPower")}</span>
+                <select value={displayMode === "0" ? "0" : "2"} onChange={(event) => setDisplayMode(event.target.value)}>
+                  <option value="2">{t("displayOn")}</option>
+                  <option value="0">{t("displayOff")}</option>
+                </select>
               </label>
             </div>
-            <div className="control-row">
-              <select value={displayMode} onChange={(event) => setDisplayMode(event.target.value)}>
-                <option value="0">{t("displayOff")}</option>
-                {supportsManualDisplay ? <option value="1">{t("displayManual")}</option> : null}
-                <option value="2">{t("displayPowerMeter")}</option>
-              </select>
-              <button disabled={controlDisabled || displayIntensityInvalid} onClick={() => runCommand("display-intensity", "displayIntensity", { intensity: Number(displayIntensity) })} type="button">{t("applyBrightness")}</button>
-              <button disabled={controlDisabled} onClick={() => runCommand("display-mode", "displayMode", { mode: Number(displayMode) })} type="button">{t("applyDisplayMode")}</button>
-            </div>
-            {supportsDisplayAnimation ? (
-              <div className="control-row">
-                <select value={displayRotation} onChange={(event) => setDisplayRotation(event.target.value)}>
+            <div className="display-control-actions">
+              <label className="control-field">
+                <span>{t("displayContentMode")}</span>
+                <select disabled value="2">
+                  <option value="2">{t("displayPowerMeter")}</option>
+                </select>
+              </label>
+              <label className="control-field">
+                <span>{t("displayRotation")}</span>
+                <select disabled={!supportsDisplayRotation} value={displayRotation} onChange={(event) => setDisplayRotation(event.target.value)}>
                   <option value="0">0deg</option>
                   <option value="1">90deg</option>
                   <option value="2">180deg</option>
                   <option value="3">270deg</option>
                 </select>
-                <select value={idleAnimation} onChange={(event) => setIdleAnimation(event.target.value)}>
-                  <option value="0">{t("idleNone")}</option>
-                  <option value="1">{t("idleMeteor")}</option>
-                  <option value="2">{t("idleLife")}</option>
-                </select>
-                <button disabled={controlDisabled || displayIntensityInvalid} onClick={() => runCommand("display-setup", "displaySetup", { intensity: Number(displayIntensity), rotation: Number(displayRotation), idleAnimation: Number(idleAnimation) })} type="button">{t("applyDisplay")}</button>
-              </div>
-            ) : (
-              <small className="control-note">{t("displayAnimationUnsupported")}</small>
-            )}
+              </label>
+              {supportsDisplayAnimation ? (
+                <label className="control-field">
+                  <span>{t("displayIdleAnimation")}</span>
+                  <select value={idleAnimation} onChange={(event) => setIdleAnimation(event.target.value)}>
+                    <option value="0">{t("idleNone")}</option>
+                    <option value="1">{t("idleMeteor")}</option>
+                    <option value="2">{t("idleLife")}</option>
+                  </select>
+                </label>
+              ) : (
+                <label className="control-field">
+                  <span>{t("displayIdleAnimation")}</span>
+                  <select disabled value="0">
+                    <option value="0">{t("idleUnsupported")}</option>
+                  </select>
+                </label>
+              )}
+              <button disabled={controlDisabled || displayIntensityInvalid} onClick={() => void applyDisplayControl()} type="button">{t("applyDisplay")}</button>
+            </div>
+            <p className="display-control-note">
+              {supportsDisplayAnimation ? t("displayCp02sSupportNote") : t("displayBasicSupportNote")}
+            </p>
           </section>
         </div>
       </details>
@@ -1795,7 +1843,7 @@ function App() {
 
   async function handleMqttSettingsApply(nextConfig: { enabled: boolean; brokerUrl: string; username: string; password?: string }) {
     await runConnectionAction(async () => {
-      const saved = await saveMqttConfig(nextConfig);
+      const saved = await saveMqttConfig({ ...nextConfig, deviceKey: activeDeviceKey });
       setSavedTargets(saved.config.targets);
       setMqttConfig(saved.config.mqtt);
       setMqttStatus(saved.mqtt.status);
@@ -1976,12 +2024,12 @@ function App() {
               port={port}
               runtimeState={stablePortStates.get(port.id)}
               isPeak={peakPortPower > 0 && watts(port) === peakPortPower}
-              mqttEnabled={Boolean(mqttConfig?.enabled && mqttStatus?.connected && activeDeviceKey)}
+              mqttEnabled={Boolean(mqttConfig?.configured && mqttStatus?.connected && activeDeviceKey)}
               onSetPower={(enabled) => handlePortPower(port.id, enabled)}
             />
           ))}
         </section>
-        {mqttConfig?.enabled ? (
+        {mqttConfig?.configured ? (
           <MqttControl
             activeDeviceKey={activeDeviceKey}
             config={mqttConfig}

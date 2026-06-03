@@ -20,6 +20,11 @@ import {
 } from "../format";
 import { useI18n, type TranslationKey } from "../i18n";
 import type { HeapMetrics, MachineInfo, Metrics, PortHistory, PortMetrics } from "../types";
+const TEMPERATURE_CHART_COLOR = "#e04b2f";
+
+function formatTemperatureAxis(value: unknown) {
+  return typeof value === "number" && value > 0 ? `${value.toFixed(0)}C` : "0";
+}
 
 function formatDateTimeLocal(date: Date) {
   const pad = (value: number) => String(value).padStart(2, "0");
@@ -399,7 +404,8 @@ function PortHistoryExplorer({
                   orientation="right"
                   tickLine={false}
                   axisLine={false}
-                  tick={{ fill: "#9c4f22", fontSize: 12 }}
+                  tick={{ fill: TEMPERATURE_CHART_COLOR, fontSize: 12 }}
+                  tickFormatter={formatTemperatureAxis}
                 />
                 <Tooltip content={<PortDetailTooltip />} />
                 <Area
@@ -418,9 +424,9 @@ function PortHistoryExplorer({
                   dot={false}
                   isAnimationActive={false}
                   name="temperature"
-                  stroke="#7f6d52"
+                  stroke={TEMPERATURE_CHART_COLOR}
                   strokeDasharray="4 4"
-                  strokeWidth={2}
+                  strokeWidth={2.4}
                   type="monotone"
                   yAxisId="temperature"
                 />

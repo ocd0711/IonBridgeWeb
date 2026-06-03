@@ -99,6 +99,20 @@ Dashboard: http://localhost:18083/
 
 EMQX 管理后台默认用户是 `admin`，默认密码在 `docker-compose.yml` 里通过 `EMQX_DASHBOARD__DEFAULT_PASSWORD` 设置，部署前应修改。默认 MQTT 监听端口 `1883` 未配置客户端认证，适合内网测试；如果要映射到公网，必须在 EMQX 后台配置认证、ACL 或 TLS。
 
+### EMQX 账号与访问控制
+
+EMQX Dashboard 默认用户名是 `admin`。默认密码来自 `docker-compose.yml` 的 `EMQX_DASHBOARD__DEFAULT_PASSWORD`，第一次部署前建议先改成自己的密码。
+
+Dashboard 的 `admin` 账号只用于登录 EMQX 管理后台，不等同于 MQTT 客户端账号。启用 Password-Based 客户端认证后，还需要在 EMQX 后台创建给设备和 IonBridgeWeb 使用的 MQTT 用户：
+
+1. 打开 `http://localhost:18083/`，用 `admin` 和 `EMQX_DASHBOARD__DEFAULT_PASSWORD` 登录。
+2. 进入「访问控制」→「客户端认证」。
+3. 启用或新建 `Password-Based` 认证，数据源可以选择内置数据库。
+4. 在「用户管理」里添加 MQTT 客户端用户，例如 `ocd`，并设置密码。
+5. 回到 IonBridgeWeb 右上角设备设置，在「MQTT 接管」里填写 broker 地址、这个 MQTT 用户名和密码，再保存同步到设备。
+
+设备和 IonBridgeWeb 必须使用同一组 MQTT 客户端账号。broker 地址要填设备能访问到的宿主机局域网地址，例如 `mqtt://192.168.1.118:1883`，不要填 `mqtt://127.0.0.1:1883` 或容器内地址 `mqtt://emqx:1883`。
+
 `docker-compose.yml` 中常用环境变量：
 
 ```yaml

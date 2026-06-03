@@ -157,7 +157,7 @@ export async function saveServerConfig(config: { targetUrl: string; refreshInter
   return response.json() as Promise<ServerSession["config"]>;
 }
 
-export async function saveMqttConfig(config: { enabled: boolean; brokerUrl: string; username: string; password?: string }) {
+export async function saveMqttConfig(config: { enabled: boolean; brokerUrl: string; username: string; password?: string; deviceKey?: string | null }) {
   const response = await fetch("/api/mqtt", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },

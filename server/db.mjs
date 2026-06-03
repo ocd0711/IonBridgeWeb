@@ -71,6 +71,14 @@ export function createStore({ databasePath, defaultIntervalMs, retentionDays }) 
     if (password !== undefined) setSetting("mqtt_password", String(password ?? ""));
   }
 
+  function setDiscoveredMqttBroker(brokerUri) {
+    const broker = parseMqttBrokerUri(brokerUri);
+    if (!broker.brokerUrl) return;
+    setSetting("mqtt_broker_url", broker.brokerUrl);
+    setSetting("mqtt_username", broker.username);
+    setSetting("mqtt_password", broker.password);
+  }
+
   function upsertVerifiedTarget({ deviceKey, targetUrl, refreshIntervalMs, note = null, active, status = "online", error = null }) {
     const normalizedTarget = normalizeTarget(targetUrl);
     if (!normalizedTarget) throw new Error("targetUrl is required");
@@ -279,6 +287,7 @@ export function createStore({ databasePath, defaultIntervalMs, retentionDays }) 
     getMqttConfig,
     getMqttConnectionOptions,
     setMqttConfig,
+    setDiscoveredMqttBroker,
     upsertVerifiedTarget,
     markTargetStatus,
     markTargetStatusByTarget,
@@ -489,4 +498,19 @@ export function normalizeMqttBrokerUrl(value) {
   }
   if (!url.hostname) throw new Error("MQTT broker host is required");
   return url.toString().replace(/\/$/, "");
+}
+
+function parseMqttBrokerUri(value) {
+  const normalized = normalizeMqttBrokerUrl(value);
+  if (!normalized) return { brokerUrl: "", username: "", password: "" };
+  const url = new URL(normalized);
+  const username = decodeURIComponent(url.username);
+  const password = decodeURIComponent(url.password);
+  url.username = "";
+  url.password = "";
+  return {
+    brokerUrl: url.toString().replace(/\/$/, ""),
+    username,
+    password,
+  };
 }

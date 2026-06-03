@@ -69,13 +69,16 @@ export function createRoutes({
     try {
       const enabled = Boolean(body.enabled);
       const brokerUrl = normalizeMqttBrokerUrl(body.brokerUrl);
-      const currentTarget = getConfig().targetUrl;
+      const requestedDeviceKey = normalizeDeviceKey(body.deviceKey);
+      const currentTarget = requestedDeviceKey
+        ? store.savedProxyTarget({ deviceKey: requestedDeviceKey })
+        : getConfig().targetUrl;
       const existingMqtt = store.getMqttConnectionOptions();
       const username = String(body.username ?? "").trim();
       const password = body.password === undefined ? existingMqtt.password : String(body.password ?? "");
       if (enabled && !brokerUrl) return sendJson(res, { error: "MQTT broker URL is required" }, 400);
       if (enabled && !currentTarget) return sendJson(res, { error: "target device is required" }, 400);
-      if (currentTarget) await ensureDeviceMqttBroker(currentTarget, { enabled, brokerUrl, username, password });
+      if (currentTarget) await ensureDeviceMqttBroker(currentTarget, { enabled, brokerUrl, username, password }, { force: true });
       store.setMqttConfig({
         enabled,
         brokerUrl,
