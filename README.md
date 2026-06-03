@@ -222,7 +222,7 @@ device/+/enduser/response/+
 - TFCP / FCP / UFCS / SCP 兼容协议开关。
 - 自定义 PDO 电压。
 - 线补配置。
-- 屏幕亮度、屏显模式、旋转和待机动画。
+- 屏幕亮度和屏幕开关。由于 [ifanrx/IonBridge.git](https://github.com/ifanrx/IonBridge.git) 公开源码不是最新版本，CP02S 相关参数和屏幕控制代码不完整，屏显模式、旋转和待机动画暂时不能完整支持；IonBridgeWeb 会按当前可核对的固件能力置灰或说明不可用项。
 
 以下固件命令没有放进普通 Web UI：license、OTA、清 NVS、原始 MCU forward、GPIO/ADC、工厂态切换。这些命令风险高或偏调试用途，不适合在日常监控面板里直接暴露。
 
