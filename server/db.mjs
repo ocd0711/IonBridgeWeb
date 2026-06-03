@@ -40,40 +40,91 @@ export function createStore({ databasePath, defaultIntervalMs, retentionDays }) 
       refreshIntervalMs: activeEntry?.refreshIntervalMs ?? defaultIntervalMs,
       showAppearanceSwitcher,
       targets,
-      mqtt: getMqttConfig(),
+      mqtt: getMqttConfig(activeEntry?.deviceKey),
     };
   }
 
-  function getMqttConfig() {
-    const brokerUrl = getSetting("mqtt_broker_url", "");
-    const username = getSetting("mqtt_username", "");
+  function getMqttConfig(deviceKey = null) {
+    const row = mqttRowForDevice(deviceKey);
+    const brokerUrl = row?.mqtt_broker_url ?? getSetting("mqtt_broker_url", "");
+    const username = row?.mqtt_username ?? getSetting("mqtt_username", "");
     return {
-      enabled: getSetting("mqtt_enabled", "false") === "true",
+      enabled: row ? Boolean(row.mqtt_enabled) : getSetting("mqtt_enabled", "false") === "true",
       brokerUrl,
       username,
       configured: Boolean(brokerUrl),
-      hasPassword: Boolean(getSetting("mqtt_password", "")),
+      hasPassword: row ? Boolean(row.mqtt_password) : Boolean(getSetting("mqtt_password", "")),
     };
   }
 
-  function getMqttConnectionOptions() {
-    const config = getMqttConfig();
+  function getMqttConnectionOptions(deviceKey = null) {
+    const row = mqttRowForDevice(deviceKey);
+    const config = getMqttConfig(deviceKey);
     return {
       ...config,
-      password: getSetting("mqtt_password", ""),
+      deviceKey: normalizeDeviceKey(deviceKey) ?? row?.device_key ?? null,
+      password: row ? row.mqtt_password : getSetting("mqtt_password", ""),
     };
   }
 
-  function setMqttConfig({ enabled, brokerUrl, username, password }) {
+  function listMqttConnectionOptions() {
+    return db.prepare(`
+      SELECT device_key deviceKey, mqtt_enabled enabled, mqtt_broker_url brokerUrl,
+        mqtt_username username, mqtt_password password
+      FROM targets
+      WHERE mqtt_broker_url IS NOT NULL AND mqtt_broker_url != ''
+      ORDER BY updated_at DESC, created_at DESC
+    `).all().map((row) => ({
+      deviceKey: row.deviceKey,
+      enabled: Boolean(row.enabled),
+      configured: Boolean(row.brokerUrl),
+      brokerUrl: row.brokerUrl,
+      username: row.username ?? "",
+      password: row.password ?? "",
+    }));
+  }
+
+  function setMqttConfig({ deviceKey = null, enabled, brokerUrl, username, password }) {
+    const normalizedDeviceKey = normalizeDeviceKey(deviceKey);
+    if (normalizedDeviceKey) {
+      const fields = [
+        "mqtt_enabled = ?",
+        "mqtt_broker_url = ?",
+        "mqtt_username = ?",
+        "updated_at = ?",
+      ];
+      const values = [
+        enabled ? 1 : 0,
+        normalizeMqttBrokerUrl(brokerUrl),
+        String(username ?? "").trim(),
+        Date.now(),
+      ];
+      if (password !== undefined) {
+        fields.splice(3, 0, "mqtt_password = ?");
+        values.splice(3, 0, String(password ?? ""));
+      }
+      values.push(normalizedDeviceKey);
+      db.prepare(`UPDATE targets SET ${fields.join(", ")} WHERE device_key = ?`).run(...values);
+      return;
+    }
     setSetting("mqtt_enabled", enabled ? "true" : "false");
     setSetting("mqtt_broker_url", normalizeMqttBrokerUrl(brokerUrl));
     setSetting("mqtt_username", String(username ?? "").trim());
     if (password !== undefined) setSetting("mqtt_password", String(password ?? ""));
   }
 
-  function setDiscoveredMqttBroker(brokerUri) {
+  function setDiscoveredMqttBroker(brokerUri, deviceKey = null) {
     const broker = parseMqttBrokerUri(brokerUri);
     if (!broker.brokerUrl) return;
+    const normalizedDeviceKey = normalizeDeviceKey(deviceKey);
+    if (normalizedDeviceKey) {
+      db.prepare(`
+        UPDATE targets
+        SET mqtt_broker_url = ?, mqtt_username = ?, mqtt_password = ?, updated_at = ?
+        WHERE device_key = ?
+      `).run(broker.brokerUrl, broker.username, broker.password, Date.now(), normalizedDeviceKey);
+      return;
+    }
     setSetting("mqtt_broker_url", broker.brokerUrl);
     setSetting("mqtt_username", broker.username);
     setSetting("mqtt_password", broker.password);
@@ -252,6 +303,22 @@ export function createStore({ databasePath, defaultIntervalMs, retentionDays }) 
     return db.prepare("SELECT target_url FROM targets WHERE target_url = ?").get(normalizedTarget)?.target_url ?? null;
   }
 
+  function deviceKeyForTarget(targetUrl) {
+    const normalizedTarget = normalizeTarget(targetUrl);
+    if (!normalizedTarget) return null;
+    return db.prepare("SELECT device_key FROM targets WHERE target_url = ?").get(normalizedTarget)?.device_key ?? null;
+  }
+
+  function mqttRowForDevice(deviceKey) {
+    const normalizedDeviceKey = normalizeDeviceKey(deviceKey);
+    if (!normalizedDeviceKey) return null;
+    return db.prepare(`
+      SELECT device_key, mqtt_enabled, mqtt_broker_url, mqtt_username, mqtt_password
+      FROM targets
+      WHERE device_key = ?
+    `).get(normalizedDeviceKey) ?? null;
+  }
+
   function updateTargetNote({ deviceKey, targetUrl, note }) {
     const normalizedDeviceKey = normalizeDeviceKey(deviceKey);
     const normalizedTarget = normalizeTarget(targetUrl);
@@ -286,6 +353,7 @@ export function createStore({ databasePath, defaultIntervalMs, retentionDays }) 
     loadConfig,
     getMqttConfig,
     getMqttConnectionOptions,
+    listMqttConnectionOptions,
     setMqttConfig,
     setDiscoveredMqttBroker,
     upsertVerifiedTarget,
@@ -299,6 +367,7 @@ export function createStore({ databasePath, defaultIntervalMs, retentionDays }) 
     sampleCounts,
     savedTargetDeviceKey,
     savedProxyTarget,
+    deviceKeyForTarget,
     updateTargetNote,
     deleteTargetAndSamples,
   };
@@ -375,6 +444,10 @@ function openDatabase(path) {
       last_error TEXT,
       last_seen INTEGER,
       last_sample_at INTEGER,
+      mqtt_enabled INTEGER NOT NULL DEFAULT 0,
+      mqtt_broker_url TEXT NOT NULL DEFAULT '',
+      mqtt_username TEXT NOT NULL DEFAULT '',
+      mqtt_password TEXT NOT NULL DEFAULT '',
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );
@@ -382,6 +455,10 @@ function openDatabase(path) {
   if (!tableHasRequiredColumns(database, "targets", ["note"])) {
     database.exec("ALTER TABLE targets ADD COLUMN note TEXT NOT NULL DEFAULT ''");
   }
+  addColumnIfMissing(database, "targets", "mqtt_enabled INTEGER NOT NULL DEFAULT 0");
+  addColumnIfMissing(database, "targets", "mqtt_broker_url TEXT NOT NULL DEFAULT ''");
+  addColumnIfMissing(database, "targets", "mqtt_username TEXT NOT NULL DEFAULT ''");
+  addColumnIfMissing(database, "targets", "mqtt_password TEXT NOT NULL DEFAULT ''");
   if (!targetsSchemaIsCurrent(database)) {
     database.exec(`
       DROP TABLE IF EXISTS targets_v2;
@@ -394,15 +471,22 @@ function openDatabase(path) {
         last_error TEXT,
         last_seen INTEGER,
         last_sample_at INTEGER,
+        mqtt_enabled INTEGER NOT NULL DEFAULT 0,
+        mqtt_broker_url TEXT NOT NULL DEFAULT '',
+        mqtt_username TEXT NOT NULL DEFAULT '',
+        mqtt_password TEXT NOT NULL DEFAULT '',
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       );
       INSERT OR REPLACE INTO targets_v2 (
         device_key, target_url, note, refresh_interval_ms, last_status, last_error,
-        last_seen, last_sample_at, created_at, updated_at
+        last_seen, last_sample_at, mqtt_enabled, mqtt_broker_url, mqtt_username, mqtt_password,
+        created_at, updated_at
       )
       SELECT device_key, target_url, COALESCE(note, ''), refresh_interval_ms,
         COALESCE(last_status, 'unknown'), last_error, last_seen, last_sample_at,
+        COALESCE(mqtt_enabled, 0), COALESCE(mqtt_broker_url, ''),
+        COALESCE(mqtt_username, ''), COALESCE(mqtt_password, ''),
         COALESCE(NULLIF(created_at, 0), strftime('%s','now') * 1000),
         COALESCE(NULLIF(updated_at, 0), strftime('%s','now') * 1000)
       FROM targets
@@ -416,6 +500,22 @@ function openDatabase(path) {
   }
   database.exec(`
     CREATE INDEX IF NOT EXISTS idx_targets_target_url ON targets(target_url);
+  `);
+  database.exec(`
+    UPDATE targets
+    SET mqtt_enabled = CASE WHEN COALESCE(mqtt_broker_url, '') = '' THEN COALESCE((
+        SELECT CASE WHEN value = 'true' THEN 1 ELSE 0 END FROM settings WHERE key = 'mqtt_enabled'
+      ), mqtt_enabled) ELSE mqtt_enabled END,
+      mqtt_broker_url = CASE WHEN COALESCE(mqtt_broker_url, '') = '' THEN COALESCE((
+        SELECT value FROM settings WHERE key = 'mqtt_broker_url'
+      ), '') ELSE mqtt_broker_url END,
+      mqtt_username = CASE WHEN COALESCE(mqtt_username, '') = '' THEN COALESCE((
+        SELECT value FROM settings WHERE key = 'mqtt_username'
+      ), '') ELSE mqtt_username END,
+      mqtt_password = CASE WHEN COALESCE(mqtt_password, '') = '' THEN COALESCE((
+        SELECT value FROM settings WHERE key = 'mqtt_password'
+      ), '') ELSE mqtt_password END
+    WHERE COALESCE((SELECT value FROM settings WHERE key = 'mqtt_broker_url'), '') != '';
   `);
   database.prepare("DELETE FROM settings WHERE key = ?").run("active_target_url");
   database.prepare("DELETE FROM settings WHERE key = ?").run("refresh_interval_ms");
@@ -458,6 +558,7 @@ function targetsSchemaIsCurrent(database) {
     names.has("note") &&
     names.has("refresh_interval_ms") &&
     names.has("last_status") &&
+    names.has("mqtt_broker_url") &&
     !names.has("label") &&
     !names.has("enabled") &&
     Boolean(deviceKey?.pk)

@@ -150,8 +150,9 @@ async function refreshConfig() {
   return config;
 }
 
-async function ensureDeviceMqttBroker(targetUrl, mqttOptions = store.getMqttConnectionOptions(), options = {}) {
+async function ensureDeviceMqttBroker(targetUrl, mqttOptions = store.getMqttConnectionOptions(store.deviceKeyForTarget(targetUrl)), options = {}) {
   const normalizedTarget = normalizeTarget(targetUrl);
+  const deviceKey = store.deviceKeyForTarget(normalizedTarget);
   const signature = mqttOptions.enabled && mqttOptions.brokerUrl
     ? deviceBrokerUri(mqttOptions)
     : "";
@@ -162,7 +163,7 @@ async function ensureDeviceMqttBroker(targetUrl, mqttOptions = store.getMqttConn
   if (!mqttOptions.enabled && !options.force) {
     if (currentBroker) {
       if (cached?.signature === currentBroker && now - cached.ts < 10 * 60 * 1000) return;
-      store.setDiscoveredMqttBroker(currentBroker);
+      store.setDiscoveredMqttBroker(currentBroker, deviceKey);
       await refreshConfig();
       mqttBridge.reconnect();
       mqttBrokerSync.set(normalizedTarget, { signature: currentBroker, ts: now });

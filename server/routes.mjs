@@ -58,9 +58,12 @@ export function createRoutes({
   }
 
   function mqttPayload() {
+    const config = getConfig();
+    const activeTarget = config.targets.find((target) => target.targetUrl === config.targetUrl) ?? config.targets[0] ?? null;
+    const deviceKey = activeTarget?.deviceKey ?? null;
     return {
-      config: store.getMqttConfig(),
-      status: mqttBridge.status(),
+      config: store.getMqttConfig(deviceKey),
+      status: mqttBridge.status(deviceKey),
     };
   }
 
@@ -73,13 +76,15 @@ export function createRoutes({
       const currentTarget = requestedDeviceKey
         ? store.savedProxyTarget({ deviceKey: requestedDeviceKey })
         : getConfig().targetUrl;
-      const existingMqtt = store.getMqttConnectionOptions();
+      const currentDeviceKey = requestedDeviceKey ?? store.deviceKeyForTarget(currentTarget);
+      const existingMqtt = store.getMqttConnectionOptions(currentDeviceKey);
       const username = String(body.username ?? "").trim();
       const password = body.password === undefined ? existingMqtt.password : String(body.password ?? "");
       if (enabled && !brokerUrl) return sendJson(res, { error: "MQTT broker URL is required" }, 400);
       if (enabled && !currentTarget) return sendJson(res, { error: "target device is required" }, 400);
-      if (currentTarget) await ensureDeviceMqttBroker(currentTarget, { enabled, brokerUrl, username, password }, { force: true });
+      if (enabled && currentTarget) await ensureDeviceMqttBroker(currentTarget, { enabled, brokerUrl, username, password }, { force: true });
       store.setMqttConfig({
+        deviceKey: currentDeviceKey,
         enabled,
         brokerUrl,
         username,

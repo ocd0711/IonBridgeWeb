@@ -16,15 +16,8 @@ const TelemetryCommand = {
 export function createMqttBridge({ store, refreshConfig, broadcast }) {
   const codec = loadCodec();
   const deviceState = new Map();
-  let client = null;
-  let connection = {
-    enabled: false,
-    configured: false,
-    brokerUrl: "",
-    connected: false,
-    lastError: null,
-    lastMessageAt: null,
-  };
+  const clients = new Map();
+  const deviceClientKeys = new Map();
   let requestId = 1;
   const pendingRequests = new Map();
   const lastTelemetryRequestAt = new Map();
@@ -36,64 +29,94 @@ export function createMqttBridge({ store, refreshConfig, broadcast }) {
   }
 
   function reconnect() {
-    const config = store.getMqttConnectionOptions();
-    const shouldConnect = Boolean(config.brokerUrl);
-    closeClient();
-    connection = {
-      enabled: shouldConnect,
+    closeClients();
+    for (const config of store.listMqttConnectionOptions()) {
+      if (!config.deviceKey || !config.brokerUrl) continue;
+      const key = brokerSignature(config);
+      deviceClientKeys.set(config.deviceKey, key);
+      if (clients.has(key)) continue;
+      clients.set(key, createClientEntry(config, key));
+    }
+    if (clients.size > 0) startTelemetryKickTimer();
+  }
+
+  function createClientEntry(config, key) {
+    const connection = {
+      enabled: true,
       configured: config.configured,
       brokerUrl: config.brokerUrl,
       connected: false,
       lastError: null,
-      lastMessageAt: connection.lastMessageAt,
+      lastMessageAt: null,
     };
-    if (!shouldConnect) return;
-
-    client = mqtt.connect(config.brokerUrl, {
+    const nextClient = mqtt.connect(config.brokerUrl, {
       username: config.username || undefined,
       password: config.password || undefined,
       reconnectPeriod: 3000,
       connectTimeout: 8000,
       clean: true,
       clientId: `ionbridge-web-${Math.random().toString(16).slice(2)}`,
+      manualConnect: true,
     });
-    client.on("connect", () => {
-      connection = { ...connection, connected: true, lastError: null };
-      client?.subscribe(["device/+/telemetry/+", "device/+/enduser/response/+"], { qos: 0 });
-      requestTelemetryForSavedTargets({ includeDeviceInfo: true, force: true });
-      startTelemetryKickTimer();
+    const entry = { client: nextClient, connection };
+    nextClient.on("connect", () => {
+      if (clients.get(key) !== entry) return;
+      entry.connection = { ...entry.connection, connected: true, lastError: null };
+      nextClient.subscribe(["device/+/telemetry/+", "device/+/enduser/response/+"], { qos: 0 }, (error) => {
+        if (error) updateClientError(entry, error);
+      });
+      requestTelemetryForBroker(key, { includeDeviceInfo: true, force: true });
     });
-    client.on("message", (topic, payload) => {
-      connection = { ...connection, lastError: null, lastMessageAt: Date.now() };
+    nextClient.on("message", (topic, payload) => {
+      if (clients.get(key) !== entry) return;
+      entry.connection = { ...entry.connection, lastError: null, lastMessageAt: Date.now() };
       handleMessage(topic, payload);
     });
-    client.on("error", (error) => {
-      connection = { ...connection, connected: false, lastError: error.message };
+    nextClient.on("error", (error) => {
+      if (clients.get(key) !== entry) return;
+      updateClientError(entry, error);
     });
-    client.on("close", () => {
-      connection = { ...connection, connected: false };
+    nextClient.on("close", () => {
+      if (clients.get(key) !== entry) return;
+      entry.connection = { ...entry.connection, connected: false };
       rejectPending("MQTT broker disconnected");
-      stopTelemetryKickTimer();
     });
+    nextClient.connect();
+    return entry;
   }
 
-  function closeClient() {
+  function closeClients() {
     stopTelemetryKickTimer();
-    if (!client) return;
+    const closingClients = [...clients.values()].map((entry) => entry.client);
+    clients.clear();
+    deviceClientKeys.clear();
     rejectPending("MQTT broker disconnected");
-    client.removeAllListeners();
-    client.end(true);
-    client = null;
+    for (const closingClient of closingClients) {
+      closingClient.removeAllListeners();
+      closingClient.on("error", () => {});
+      closingClient.end(true);
+    }
   }
 
-  function status() {
-    return { ...connection };
+  function status(deviceKey = null) {
+    const entry = clientEntryForDevice(deviceKey);
+    if (entry) return { ...entry.connection };
+    const entries = [...clients.values()];
+    return {
+      enabled: entries.length > 0,
+      configured: entries.length > 0,
+      brokerUrl: entries.map((clientEntry) => clientEntry.connection.brokerUrl).join(", "),
+      connected: entries.some((clientEntry) => clientEntry.connection.connected),
+      lastError: entries.find((clientEntry) => clientEntry.connection.lastError)?.connection.lastError ?? null,
+      lastMessageAt: Math.max(0, ...entries.map((clientEntry) => clientEntry.connection.lastMessageAt ?? 0)) || null,
+    };
   }
 
   function publishCommand(deviceKey, command, payload) {
-    if (!client?.connected) throw new Error("MQTT broker is not connected");
     const normalizedDeviceKey = String(deviceKey ?? "").trim();
     if (!normalizedDeviceKey) throw new Error("deviceKey is required");
+    const entry = clientEntryForDevice(normalizedDeviceKey);
+    if (!entry?.client.connected) throw new Error("MQTT broker is not connected");
     const id = nextRequestId();
     const message = codec.CommandRequest.create({
       id,
@@ -106,7 +129,7 @@ export function createMqttBridge({ store, refreshConfig, broadcast }) {
         reject(new Error("MQTT command timed out"));
       }, 8000);
       pendingRequests.set(id, { command, resolve, reject, timeout });
-      client.publish(`device/${normalizedDeviceKey}/enduser/request/${command}`, body, { qos: 0 }, (error) => {
+      entry.client.publish(`device/${normalizedDeviceKey}/enduser/request/${command}`, body, { qos: 0 }, (error) => {
         if (!error) return;
         const pending = pendingRequests.get(id);
         if (!pending) return;
@@ -205,9 +228,9 @@ export function createMqttBridge({ store, refreshConfig, broadcast }) {
     void publishCommand(normalizedDeviceKey, ServiceCommand.START_TELEMETRY_STREAM, { startTelemetryStream: {} }).catch(updateBackgroundError);
   }
 
-  function requestTelemetryForSavedTargets(options = {}) {
+  function requestTelemetryForBroker(key, options = {}) {
     for (const target of store.listTargets()) {
-      if (!target.deviceKey) continue;
+      if (!target.deviceKey || deviceClientKeys.get(target.deviceKey) !== key) continue;
       requestInitialTelemetry(target.deviceKey, options);
     }
   }
@@ -215,11 +238,11 @@ export function createMqttBridge({ store, refreshConfig, broadcast }) {
   function startTelemetryKickTimer() {
     stopTelemetryKickTimer();
     telemetryKickTimer = setInterval(() => {
-      if (!client?.connected) return;
       const now = Date.now();
       for (const target of store.listTargets()) {
         const deviceKey = String(target.deviceKey ?? "").trim();
         if (!deviceKey) continue;
+        if (!clientEntryForDevice(deviceKey)?.client.connected) continue;
         const lastPortsAt = lastPortSnapshotAt.get(deviceKey) ?? 0;
         if (lastPortsAt && now - lastPortsAt < 10000) continue;
         requestInitialTelemetry(deviceKey);
@@ -246,10 +269,7 @@ export function createMqttBridge({ store, refreshConfig, broadcast }) {
         handleTelemetry(parsed.deviceKey, parsed.commandId, decoded);
       }
     } catch (error) {
-      connection = {
-        ...connection,
-        lastError: error instanceof Error ? error.message : "failed to decode MQTT message",
-      };
+      updateDeviceClientError(parsed.deviceKey, error instanceof Error ? error : new Error("failed to decode MQTT message"));
     }
   }
 
@@ -373,7 +393,6 @@ export function createMqttBridge({ store, refreshConfig, broadcast }) {
     clearTimeout(pending.timeout);
     const status = Number(response.status ?? 1);
     if (status === 0) {
-      connection = { ...connection, lastError: null };
       pending.resolve({ command: commandId, status, payload: responsePayloadFor(commandId, response) });
       return;
     }
@@ -389,16 +408,47 @@ export function createMqttBridge({ store, refreshConfig, broadcast }) {
   }
 
   function updateLastError(error) {
-    connection = {
-      ...connection,
+    const message = error instanceof Error ? error.message : String(error);
+    for (const entry of clients.values()) {
+      entry.connection = { ...entry.connection, lastError: message };
+    }
+  }
+
+  function updateClientError(entry, error) {
+    entry.connection = {
+      ...entry.connection,
+      connected: false,
       lastError: error instanceof Error ? error.message : String(error),
     };
+    rejectPending("MQTT broker error");
+  }
+
+  function updateDeviceClientError(deviceKey, error) {
+    const entry = clientEntryForDevice(deviceKey);
+    if (entry) updateClientError(entry, error);
+    else updateLastError(error);
   }
 
   function updateBackgroundError(error) {
     const message = error instanceof Error ? error.message : String(error);
-    if (message.includes("timed out") && connection.lastMessageAt) return;
+    const hasRecentMessage = [...clients.values()].some((entry) => entry.connection.lastMessageAt);
+    if (message.includes("timed out") && hasRecentMessage) return;
     updateLastError(error);
+  }
+
+  function clientEntryForDevice(deviceKey) {
+    const normalizedDeviceKey = String(deviceKey ?? "").trim();
+    if (!normalizedDeviceKey) return null;
+    const key = deviceClientKeys.get(normalizedDeviceKey);
+    return key ? clients.get(key) ?? null : null;
+  }
+
+  function brokerSignature(config) {
+    return JSON.stringify({
+      brokerUrl: String(config.brokerUrl ?? ""),
+      username: String(config.username ?? ""),
+      password: String(config.password ?? ""),
+    });
   }
 
   return {
