@@ -728,7 +728,7 @@ function MqttControl({
   const [displayMode, setDisplayMode] = React.useState("2");
   const [displayRotation, setDisplayRotation] = React.useState("0");
   const [idleAnimation, setIdleAnimation] = React.useState("0");
-  const canControl = Boolean(activeDeviceKey && config?.configured && status?.connected);
+  const canControl = Boolean(activeDeviceKey && config?.enabled && config?.configured && status?.connected);
   const controlBusy = commandBusy !== "" || syncingState;
   const controlDisabled = disabled || controlBusy || !canControl;
   const showSettings = mode !== "control";
@@ -954,7 +954,7 @@ function MqttControl({
   }
 
   async function runStream(enabled: boolean) {
-    if (disabled || commandBusy || !activeDeviceKey || !config?.configured || !status?.connected) return;
+    if (disabled || commandBusy || !activeDeviceKey || !config?.enabled || !config?.configured || !status?.connected) return;
     setCommandBusy("stream");
     setError("");
     try {
@@ -1019,10 +1019,10 @@ function MqttControl({
         <div className="mqtt-actions">
           <button disabled={busy || disabled} type="submit">{busy ? t("validatingDevice") : t("mqttSave")}</button>
           <button disabled={busy || disabled} onClick={resetMqttConfig} type="button">{t("mqttResetDefault")}</button>
-          <button disabled={disabled || commandBusy !== "" || !activeDeviceKey || !config?.configured || !status?.connected} onClick={() => runStream(true)} type="button">
+          <button disabled={disabled || commandBusy !== "" || !activeDeviceKey || !config?.enabled || !config?.configured || !status?.connected} onClick={() => runStream(true)} type="button">
             {t("mqttStartStream")}
           </button>
-          <button disabled={disabled || commandBusy !== "" || !activeDeviceKey || !config?.configured || !status?.connected} onClick={() => runStream(false)} type="button">
+          <button disabled={disabled || commandBusy !== "" || !activeDeviceKey || !config?.enabled || !config?.configured || !status?.connected} onClick={() => runStream(false)} type="button">
             {t("mqttStopStream")}
           </button>
         </div>
@@ -1979,6 +1979,7 @@ function App() {
     deviceProfiles.find((profile) => profile.key === (showAppearanceSwitcher ? activeProfileKey ?? detectedProfile.key : detectedProfile.key)) ??
     detectedProfile;
   const peakPortPower = Math.max(...metrics.ports.filter((port) => stablePortStates.get(port.id) === "attached").map(watts), 0);
+  const mqttDeviceControlEnabled = Boolean(mqttConfig?.enabled && mqttConfig.configured && mqttStatus?.connected && activeDeviceKey);
 
   return (
     <I18nContext.Provider value={i18n}>
@@ -2024,12 +2025,12 @@ function App() {
               port={port}
               runtimeState={stablePortStates.get(port.id)}
               isPeak={peakPortPower > 0 && watts(port) === peakPortPower}
-              mqttEnabled={Boolean(mqttConfig?.configured && mqttStatus?.connected && activeDeviceKey)}
+              mqttEnabled={mqttDeviceControlEnabled}
               onSetPower={(enabled) => handlePortPower(port.id, enabled)}
             />
           ))}
         </section>
-        {mqttConfig?.configured ? (
+        {mqttDeviceControlEnabled ? (
           <MqttControl
             activeDeviceKey={activeDeviceKey}
             config={mqttConfig}
